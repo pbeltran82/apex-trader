@@ -1,19 +1,23 @@
 """
 DecisionEngine — core logic module.
 
-This is NOT a route. It is the brain of the system.
-Routes in main.py are thin wrappers around engine.evaluate().
+Architecture (layered, inside-out):
 
-Architecture:
-  API → DecisionEngine → [market layer, risk layer, state layer] → Alpaca
+  API
+   └── DecisionEngine.evaluate(symbol)
+         ├── SnapshotBuilder.build()     → MarketSnapshot   (pure data, no logic)
+         ├── RiskEvaluator.check()       → list[RiskViolation]  (hard blocks)
+         └── StrategyEvaluator.generate() → Signal          (soft signals)
 
-Rules are evaluated in order. The first rule that fires wins.
-To add a new strategy: add a method to StrategyRules and register it
-in DecisionEngine._rules. No routes need to change.
+Rules for adding new behavior:
+  - New data field?        → add to MarketSnapshot + SnapshotBuilder
+  - New hard constraint?   → add a method to RiskEvaluator
+  - New trading strategy?  → add a method to StrategyEvaluator
+  - Route (main.py)?       → never changes
 """
 
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Any, Optional
 from alpaca.trading.client import TradingClient
 from alpaca.trading.requests import GetOrdersRequest
 from alpaca.trading.enums import QueryOrderStatus
@@ -25,37 +29,85 @@ from datetime import datetime, timedelta, timezone
 
 
 # ------------------------------------
-# CONFIG (overridable at engine init)
+# CONFIG
 # ------------------------------------
 
 @dataclass
 class EngineConfig:
-    # Risk gates — mirror the safety config in main.py
-    max_position_pct: float = 0.20      # max portfolio % in one symbol
-    max_invested_pct: float = 0.90      # max total equity deployed
-    max_open_positions: int = 10        # max distinct holdings
-    min_cash_buffer: float = 100.0      # minimum cash to keep ($)
+    # Risk gates
+    max_position_pct: float = 0.20       # max portfolio % in one symbol
+    max_invested_pct: float = 0.90       # max total equity deployed
+    max_open_positions: int = 10         # max distinct holdings
+    min_cash_buffer: float = 100.0       # minimum cash to keep ($)
 
-    # Strategy thresholds (v1: simple rules)
-    stop_loss_pct: float = -0.05        # sell if unrealized P&L < -5%
-    take_profit_pct: float = 0.10       # sell if unrealized P&L > +10%
-    min_price: float = 1.0              # ignore penny stocks below this price
-    lookback_bars: int = 10             # bars used for momentum calculation
-    momentum_buy_threshold: float = 0.01  # buy if price is up >1% over lookback
-    momentum_sell_threshold: float = -0.01  # sell signal if down >1% over lookback
+    # Strategy thresholds
+    stop_loss_pct: float = -0.05         # sell if unrealized P&L < -5%
+    take_profit_pct: float = 0.10        # sell if unrealized P&L > +10%
+    min_price: float = 1.0               # penny stock filter
+    lookback_bars: int = 10              # bars used for momentum
+    momentum_buy_threshold: float = 0.01
+    momentum_sell_threshold: float = -0.01
 
 
 # ------------------------------------
-# RESULT
+# LAYER 0 — SHARED TYPES
 # ------------------------------------
+
+@dataclass
+class MarketSnapshot:
+    """
+    Pure data container. No logic, no Alpaca calls.
+    Built once per evaluate() call; shared across all layers.
+    """
+    symbol: str
+    price: float
+    momentum_pct: Optional[float]
+    lookback_bars: int                    # actual bars returned (may be < requested)
+    equity: float
+    cash: float
+    invested_pct: float
+    open_positions: int
+    existing_position: Optional[Any]      # Alpaca Position object or None
+    position_pct: float                   # this symbol as fraction of portfolio
+    unrealized_plpc: Optional[float]
+    pending_for_symbol: list              # open orders for this symbol
+
+    def to_context(self) -> dict:
+        """Human-readable dict attached to every Decision for transparency."""
+        return {
+            "price": self.price,
+            "momentum_pct": round(self.momentum_pct, 4) if self.momentum_pct is not None else None,
+            "lookback_bars": self.lookback_bars,
+            "equity": self.equity,
+            "cash": self.cash,
+            "invested_pct": round(self.invested_pct, 4),
+            "open_positions": self.open_positions,
+            "has_position": self.existing_position is not None,
+            "position_pct": round(self.position_pct, 4),
+            "unrealized_plpc": round(self.unrealized_plpc, 4) if self.unrealized_plpc is not None else None,
+            "pending_orders": len(self.pending_for_symbol),
+        }
+
+
+@dataclass
+class RiskViolation:
+    reason: str
+
+
+@dataclass
+class Signal:
+    action: str       # "buy" | "sell" | "hold"
+    reason: str
+    confidence: str   # "high" | "medium" | "low"
+
 
 @dataclass
 class Decision:
     symbol: str
-    action: str          # "buy" | "sell" | "hold"
-    reason: str          # human-readable explanation
-    confidence: str      # "high" | "medium" | "low"
-    context: dict = field(default_factory=dict)   # supporting data for transparency
+    action: str
+    reason: str
+    confidence: str
+    context: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         return {
@@ -87,80 +139,33 @@ def _normalize_status(raw: str) -> str:
 
 
 # ------------------------------------
-# DECISION ENGINE
+# LAYER 1 — SNAPSHOT BUILDER (pure data)
 # ------------------------------------
 
-class DecisionEngine:
+class SnapshotBuilder:
+    """
+    Owns all Alpaca API calls. No trading logic here.
+    Returns a fully-populated MarketSnapshot.
+    """
+
     def __init__(
         self,
         trading_client: TradingClient,
         data_client: StockHistoricalDataClient,
-        config: Optional[EngineConfig] = None,
+        config: EngineConfig,
     ):
         self.trading = trading_client
         self.data = data_client
-        self.config = config or EngineConfig()
+        self.config = config
 
-    # ------ Public API ------
-
-    def evaluate(self, symbol: str) -> Decision:
-        """
-        Evaluate whether to buy, sell, or hold a symbol.
-        Runs all rules in order; first match wins.
-        Returns a Decision with full context for transparency.
-        """
-        sym = symbol.upper()
-
-        # Gather all data first — one pass, no repeated calls
-        try:
-            snapshot = self._build_snapshot(sym)
-        except Exception as e:
-            return Decision(
-                symbol=sym,
-                action="hold",
-                reason=f"Could not gather data: {str(e)}",
-                confidence="low",
-            )
-
-        # Rules evaluated in priority order
-        rules = [
-            self._rule_risk_gates,
-            self._rule_pending_order_exists,
-            self._rule_price_too_low,
-            self._rule_stop_loss,
-            self._rule_take_profit,
-            self._rule_position_at_limit,
-            self._rule_momentum,
-        ]
-
-        for rule in rules:
-            decision = rule(sym, snapshot)
-            if decision is not None:
-                decision.context = snapshot["context"]
-                return decision
-
-        # No rule fired → hold by default
-        return Decision(
-            symbol=sym,
-            action="hold",
-            reason="No clear signal — conditions do not meet any rule threshold",
-            confidence="low",
-            context=snapshot["context"],
-        )
-
-    # ------ Snapshot builder ------
-
-    def _build_snapshot(self, symbol: str) -> dict:
-        """Fetch all layers at once. Returns a single dict the rules share."""
+    def build(self, symbol: str) -> MarketSnapshot:
         cfg = self.config
 
-        # Market layer (IEX feed — available on free Alpaca plans)
+        # --- Market data ---
         trade_req = StockLatestTradeRequest(symbol_or_symbols=symbol, feed=DataFeed.IEX)
         trade_data = self.data.get_stock_latest_trade(trade_req)
-        trade = trade_data[symbol]
-        price = float(trade.price)
+        price = float(trade_data[symbol].price)
 
-        # Historical bars for momentum (last N daily bars)
         end = datetime.now(timezone.utc)
         start = end - timedelta(days=cfg.lookback_bars * 2)  # buffer for non-trading days
         bars_req = StockBarsRequest(
@@ -171,105 +176,232 @@ class DecisionEngine:
             feed=DataFeed.IEX,
         )
         bars_data = self.data.get_stock_bars(bars_req)
-        bars = bars_data[symbol] if symbol in bars_data else []
-        bars = list(bars)[-cfg.lookback_bars:]  # keep only last N
+        bars = list(bars_data[symbol]) if symbol in bars_data else []
+        bars = bars[-cfg.lookback_bars:]
         open_price = float(bars[0].open) if bars else None
         momentum_pct = ((price - open_price) / open_price) if open_price else None
 
-        # State layer
+        # --- Portfolio state ---
         account = self.trading.get_account()
         positions = self.trading.get_all_positions()
         equity = float(account.equity)
         cash = float(account.cash)
         invested = sum(float(p.market_value) for p in positions)
 
-        existing_position = next((p for p in positions if p.symbol == symbol), None)
-        position_pct = float(existing_position.market_value) / equity if existing_position and equity > 0 else 0.0
-        unrealized_plpc = float(existing_position.unrealized_plpc) if existing_position else None
+        existing = next((p for p in positions if p.symbol == symbol), None)
+        position_pct = float(existing.market_value) / equity if existing and equity > 0 else 0.0
+        unrealized_plpc = float(existing.unrealized_plpc) if existing else None
 
-        # Pending orders for this symbol
-        orders_req = GetOrdersRequest(status=QueryOrderStatus.OPEN)
-        open_orders = self.trading.get_orders(orders_req)
-        pending_for_symbol = [
+        # --- Open orders ---
+        open_orders = self.trading.get_orders(GetOrdersRequest(status=QueryOrderStatus.OPEN))
+        pending = [
             o for o in open_orders
             if o.symbol == symbol and _normalize_status(str(o.status)) == "pending"
         ]
 
-        context = {
-            "price": price,
-            "momentum_pct": round(momentum_pct, 4) if momentum_pct is not None else None,
-            "lookback_bars": len(bars),
-            "equity": equity,
-            "cash": cash,
-            "invested_pct": round(invested / equity, 4) if equity > 0 else 0,
-            "open_positions": len(positions),
-            "has_position": existing_position is not None,
-            "position_pct": round(position_pct, 4),
-            "unrealized_plpc": round(unrealized_plpc, 4) if unrealized_plpc is not None else None,
-            "pending_orders": len(pending_for_symbol),
-        }
+        return MarketSnapshot(
+            symbol=symbol,
+            price=price,
+            momentum_pct=momentum_pct,
+            lookback_bars=len(bars),
+            equity=equity,
+            cash=cash,
+            invested_pct=invested / equity if equity > 0 else 0.0,
+            open_positions=len(positions),
+            existing_position=existing,
+            position_pct=position_pct,
+            unrealized_plpc=unrealized_plpc,
+            pending_for_symbol=pending,
+        )
 
-        return {
-            "price": price,
-            "momentum_pct": momentum_pct,
-            "equity": equity,
-            "cash": cash,
-            "invested_pct": invested / equity if equity > 0 else 0,
-            "open_positions": len(positions),
-            "existing_position": existing_position,
-            "position_pct": position_pct,
-            "unrealized_plpc": unrealized_plpc,
-            "pending_for_symbol": pending_for_symbol,
-            "context": context,
-        }
 
-    # ------ Rules ------
-    # Each rule returns a Decision if it fires, or None to pass to the next rule.
+# ------------------------------------
+# LAYER 2 — RISK EVALUATOR (hard blocks)
+# ------------------------------------
 
-    def _rule_risk_gates(self, symbol: str, snap: dict) -> Optional[Decision]:
-        cfg = self.config
-        if snap["cash"] < cfg.min_cash_buffer:
-            return Decision(symbol, "hold", f"Risk gate: cash ${snap['cash']:.2f} is below minimum buffer ${cfg.min_cash_buffer}", "high")
-        if snap["invested_pct"] > cfg.max_invested_pct:
-            return Decision(symbol, "hold", f"Risk gate: {snap['invested_pct']*100:.1f}% of equity deployed (max {cfg.max_invested_pct*100:.0f}%)", "high")
-        if snap["open_positions"] >= cfg.max_open_positions and not snap["existing_position"]:
-            return Decision(symbol, "hold", f"Risk gate: already at max {cfg.max_open_positions} open positions", "high")
-        return None
+class RiskEvaluator:
+    """
+    Hard constraints only. Each check is independent.
+    Returns ALL violations found — not just the first.
+    The engine uses the first violation as the hold reason,
+    but callers can inspect the full list for diagnostics.
+    """
 
-    def _rule_pending_order_exists(self, symbol: str, snap: dict) -> Optional[Decision]:
-        if snap["pending_for_symbol"]:
-            return Decision(symbol, "hold", f"Pending order already exists for {symbol} — wait for it to resolve", "high")
-        return None
+    def __init__(self, config: EngineConfig):
+        self.config = config
 
-    def _rule_price_too_low(self, symbol: str, snap: dict) -> Optional[Decision]:
-        if snap["price"] < self.config.min_price:
-            return Decision(symbol, "hold", f"Price ${snap['price']:.4f} is below minimum ${self.config.min_price} (penny stock filter)", "high")
-        return None
+    def check(self, snap: MarketSnapshot) -> list[RiskViolation]:
+        checks = [
+            self._cash_below_buffer,
+            self._portfolio_over_invested,
+            self._too_many_positions,
+            self._pending_order_exists,
+            self._price_too_low,
+            self._position_at_limit,
+            self._stop_loss,
+            self._take_profit,
+        ]
+        return [v for check in checks for v in ([check(snap)] if check(snap) else [])]
 
-    def _rule_stop_loss(self, symbol: str, snap: dict) -> Optional[Decision]:
-        plpc = snap["unrealized_plpc"]
-        if plpc is not None and plpc < self.config.stop_loss_pct:
-            return Decision(symbol, "sell", f"Stop-loss triggered: unrealized P&L is {plpc*100:.2f}% (threshold {self.config.stop_loss_pct*100:.0f}%)", "high")
-        return None
+    def _cash_below_buffer(self, snap: MarketSnapshot) -> Optional[RiskViolation]:
+        if snap.cash < self.config.min_cash_buffer:
+            return RiskViolation(
+                f"Cash ${snap.cash:.2f} is below minimum buffer ${self.config.min_cash_buffer:.2f}"
+            )
 
-    def _rule_take_profit(self, symbol: str, snap: dict) -> Optional[Decision]:
-        plpc = snap["unrealized_plpc"]
-        if plpc is not None and plpc > self.config.take_profit_pct:
-            return Decision(symbol, "sell", f"Take-profit triggered: unrealized P&L is {plpc*100:.2f}% (threshold +{self.config.take_profit_pct*100:.0f}%)", "high")
-        return None
+    def _portfolio_over_invested(self, snap: MarketSnapshot) -> Optional[RiskViolation]:
+        if snap.invested_pct > self.config.max_invested_pct:
+            return RiskViolation(
+                f"{snap.invested_pct*100:.1f}% of equity deployed "
+                f"(max {self.config.max_invested_pct*100:.0f}%)"
+            )
 
-    def _rule_position_at_limit(self, symbol: str, snap: dict) -> Optional[Decision]:
-        if snap["position_pct"] >= self.config.max_position_pct:
-            return Decision(symbol, "hold", f"Position at limit: {snap['position_pct']*100:.1f}% of portfolio (max {self.config.max_position_pct*100:.0f}%)", "medium")
-        return None
+    def _too_many_positions(self, snap: MarketSnapshot) -> Optional[RiskViolation]:
+        if snap.open_positions >= self.config.max_open_positions and not snap.existing_position:
+            return RiskViolation(
+                f"Already at max {self.config.max_open_positions} open positions"
+            )
 
-    def _rule_momentum(self, symbol: str, snap: dict) -> Optional[Decision]:
-        m = snap["momentum_pct"]
+    def _pending_order_exists(self, snap: MarketSnapshot) -> Optional[RiskViolation]:
+        if snap.pending_for_symbol:
+            return RiskViolation(
+                f"Pending order already exists for {snap.symbol} — wait for it to resolve"
+            )
+
+    def _price_too_low(self, snap: MarketSnapshot) -> Optional[RiskViolation]:
+        if snap.price < self.config.min_price:
+            return RiskViolation(
+                f"Price ${snap.price:.4f} is below minimum ${self.config.min_price} (penny stock filter)"
+            )
+
+    def _position_at_limit(self, snap: MarketSnapshot) -> Optional[RiskViolation]:
+        if snap.position_pct >= self.config.max_position_pct:
+            return RiskViolation(
+                f"Position is {snap.position_pct*100:.1f}% of portfolio "
+                f"(max {self.config.max_position_pct*100:.0f}%)"
+            )
+
+    def _stop_loss(self, snap: MarketSnapshot) -> Optional[RiskViolation]:
+        if snap.unrealized_plpc is not None and snap.unrealized_plpc < self.config.stop_loss_pct:
+            return RiskViolation(
+                f"Stop-loss: unrealized P&L is {snap.unrealized_plpc*100:.2f}% "
+                f"(threshold {self.config.stop_loss_pct*100:.0f}%)"
+            )
+
+    def _take_profit(self, snap: MarketSnapshot) -> Optional[RiskViolation]:
+        if snap.unrealized_plpc is not None and snap.unrealized_plpc > self.config.take_profit_pct:
+            return RiskViolation(
+                f"Take-profit: unrealized P&L is {snap.unrealized_plpc*100:.2f}% "
+                f"(threshold +{self.config.take_profit_pct*100:.0f}%)"
+            )
+
+
+# ------------------------------------
+# LAYER 3 — STRATEGY EVALUATOR (soft signals)
+# ------------------------------------
+
+class StrategyEvaluator:
+    """
+    Pure strategy logic. Only runs after all risk gates pass.
+    Each method is an independent strategy; first match wins.
+    To add a new strategy: add a method and register it in _strategies().
+    """
+
+    def __init__(self, config: EngineConfig):
+        self.config = config
+
+    def generate(self, snap: MarketSnapshot) -> Signal:
+        for strategy in self._strategies():
+            signal = strategy(snap)
+            if signal is not None:
+                return signal
+        return Signal(
+            action="hold",
+            reason="No clear signal — conditions do not meet any strategy threshold",
+            confidence="low",
+        )
+
+    def _strategies(self):
+        return [self._momentum]
+
+    def _momentum(self, snap: MarketSnapshot) -> Optional[Signal]:
+        m = snap.momentum_pct
         if m is None:
-            return Decision(snap.get("symbol", symbol), "hold", "Insufficient price history for momentum calculation", "low")
+            return Signal(
+                action="hold",
+                reason=f"Insufficient price history for momentum (got {snap.lookback_bars} bars, need {self.config.lookback_bars})",
+                confidence="low",
+            )
         cfg = self.config
-        if m >= cfg.momentum_buy_threshold and not snap["existing_position"]:
-            return Decision(symbol, "buy", f"Momentum buy: price up {m*100:.2f}% over {cfg.lookback_bars} bars (threshold +{cfg.momentum_buy_threshold*100:.1f}%)", "medium")
-        if m <= cfg.momentum_sell_threshold and snap["existing_position"]:
-            return Decision(symbol, "sell", f"Momentum sell: price down {m*100:.2f}% over {cfg.lookback_bars} bars (threshold {cfg.momentum_sell_threshold*100:.1f}%)", "medium")
+        if m >= cfg.momentum_buy_threshold and not snap.existing_position:
+            return Signal(
+                action="buy",
+                reason=f"Momentum buy: price up {m*100:.2f}% over {snap.lookback_bars} bars (threshold +{cfg.momentum_buy_threshold*100:.1f}%)",
+                confidence="medium",
+            )
+        if m <= cfg.momentum_sell_threshold and snap.existing_position:
+            return Signal(
+                action="sell",
+                reason=f"Momentum sell: price down {m*100:.2f}% over {snap.lookback_bars} bars (threshold {cfg.momentum_sell_threshold*100:.1f}%)",
+                confidence="medium",
+            )
         return None
+
+
+# ------------------------------------
+# DECISION ENGINE — orchestrator only
+# ------------------------------------
+
+class DecisionEngine:
+    """
+    Thin orchestrator. Owns no logic of its own.
+    Delegates entirely to the three layers above.
+    """
+
+    def __init__(
+        self,
+        trading_client: TradingClient,
+        data_client: StockHistoricalDataClient,
+        config: Optional[EngineConfig] = None,
+    ):
+        cfg = config or EngineConfig()
+        self.snapshot_builder = SnapshotBuilder(trading_client, data_client, cfg)
+        self.risk = RiskEvaluator(cfg)
+        self.strategy = StrategyEvaluator(cfg)
+
+    def evaluate(self, symbol: str) -> Decision:
+        sym = symbol.upper()
+
+        # Layer 1: gather data
+        try:
+            snap = self.snapshot_builder.build(sym)
+        except Exception as e:
+            return Decision(
+                symbol=sym,
+                action="hold",
+                reason=f"Snapshot failed: {str(e)}",
+                confidence="low",
+            )
+
+        context = snap.to_context()
+
+        # Layer 2: hard blocks — first violation wins
+        violations = self.risk.check(snap)
+        if violations:
+            return Decision(
+                symbol=sym,
+                action="hold",
+                reason=f"Risk block: {violations[0].reason}",
+                confidence="high",
+                context=context,
+            )
+
+        # Layer 3: soft signal
+        signal = self.strategy.generate(snap)
+        return Decision(
+            symbol=sym,
+            action=signal.action,
+            reason=signal.reason,
+            confidence=signal.confidence,
+            context=context,
+        )

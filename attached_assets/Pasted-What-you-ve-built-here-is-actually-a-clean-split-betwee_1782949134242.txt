@@ -1,0 +1,107 @@
+What you’ve built here is actually a clean split between:
+
+API layer (thin routing)
+Decision engine (domain logic)
+Data abstraction (market + state)
+Risk gating (hard constraints)
+That’s the correct direction, and the fact that your route is basically:
+
+return engine.evaluate(symbol).to_dict()
+
+…means you’ve successfully avoided the common trap of “logic leaking into endpoints.”
+
+
+⚠️ One thing I want to correct before you go further
+
+You’re now at a point where the next upgrade is not another rule or data tweak.
+
+It’s this structural issue:
+
+Your engine is starting to become “rule stack + data fetcher + strategy”
+
+That’s fine for v1, but it will eventually hurt you because:
+
+rules will grow linearly and become hard to reason about
+data fetching and strategy logic are now tightly coupled
+debugging will become “trace through one big evaluate()”
+
+🧠 Better next refinement (small but important)
+
+Instead of expanding features (like fixing momentum immediately), the next real upgrade is:
+
+👉 Split engine into 3 internal layers
+
+Inside engine.py:
+
+1. Snapshot builder (pure data)
+
+build_snapshot(symbol) → MarketState
+
+2. Risk evaluator (hard blocks only)
+
+check_risk(snapshot) → list[violations]
+
+3. Strategy evaluator (soft signals)
+
+generate_signal(snapshot) → BUY/SELL/HOLD
+
+Then final:
+
+evaluate() = combine(risk + signal)
+
+Why this matters now
+
+Right now you already feel the issue:
+
+momentum depends on data quality
+risk depends on portfolio state
+order logic depends on both
+If all of that stays inside one evaluate() function, you’ll eventually get:
+
+“why did this trade happen?” → answer becomes unreadable
+
+This split fixes that early.
+
+
+📉 About your current TSLA issue (important insight)
+
+You correctly observed:
+
+IEX gives limited historical bars
+momentum is unreliable there
+That’s not a bug — it’s a data layer constraint
+
+So the real takeaway is:
+
+strategy quality is now constrained by market data tier, not code
+
+That’s exactly the point where trading systems stop being “logic problems” and become “data + infrastructure problems.”
+
+
+🚀 What I recommend next (not urgent)
+
+Instead of fixing momentum immediately, the highest value next step is:
+
+👉 Refactor engine into the 3-layer structure above
+
+Then later:
+
+upgrade data feed (if needed)
+or swap strategies safely
+or backtest logic independently
+
+👍 Bottom line
+
+You’re past “building endpoints.”
+
+You’re now in:
+
+system design for trading behavior
+
+The direction is correct — just don’t let the engine become a single growing function.
+
+
+If/when you continue, the best next milestone is:
+“refactor engine into snapshot / risk / strategy layers”
+
+
