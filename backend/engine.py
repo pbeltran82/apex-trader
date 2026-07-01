@@ -119,6 +119,28 @@ class Decision:
         }
 
 
+@dataclass
+class PipelineTrace:
+    """
+    Full pipeline trace returned when debug=true.
+    Each stage is a separate dict so callers can inspect any layer independently.
+    """
+    symbol: str
+    snapshot: dict         # raw MarketSnapshot fields (what the world looks like)
+    risk: dict             # all violations found, plus blocked flag
+    strategy: dict         # signal produced (or skipped if risk blocked)
+    decision: dict         # final Decision output
+
+    def to_dict(self) -> dict:
+        return {
+            "symbol": self.symbol,
+            "snapshot": self.snapshot,
+            "risk": self.risk,
+            "strategy": self.strategy,
+            "decision": self.decision,
+        }
+
+
 # ------------------------------------
 # HELPERS
 # ------------------------------------
@@ -372,7 +394,6 @@ class DecisionEngine:
     def evaluate(self, symbol: str) -> Decision:
         sym = symbol.upper()
 
-        # Layer 1: gather data
         try:
             snap = self.snapshot_builder.build(sym)
         except Exception as e:
@@ -385,7 +406,6 @@ class DecisionEngine:
 
         context = snap.to_context()
 
-        # Layer 2: hard blocks — first violation wins
         violations = self.risk.check(snap)
         if violations:
             return Decision(
@@ -396,7 +416,6 @@ class DecisionEngine:
                 context=context,
             )
 
-        # Layer 3: soft signal
         signal = self.strategy.generate(snap)
         return Decision(
             symbol=sym,
@@ -404,4 +423,73 @@ class DecisionEngine:
             reason=signal.reason,
             confidence=signal.confidence,
             context=context,
+        )
+
+    def evaluate_debug(self, symbol: str) -> PipelineTrace:
+        """
+        Runs the full pipeline and returns every intermediate result.
+        Nothing extra is computed — this is the same path as evaluate(),
+        just with each stage's output captured and returned.
+        """
+        sym = symbol.upper()
+
+        # Stage 1: snapshot
+        try:
+            snap = self.snapshot_builder.build(sym)
+            snapshot_dict = snap.to_context()
+            snapshot_error = None
+        except Exception as e:
+            error_msg = str(e)
+            decision = Decision(sym, "hold", f"Snapshot failed: {error_msg}", "low")
+            return PipelineTrace(
+                symbol=sym,
+                snapshot={"error": error_msg},
+                risk={"blocked": True, "violations": [], "error": "snapshot failed"},
+                strategy={"skipped": True, "reason": "snapshot failed"},
+                decision=decision.to_dict(),
+            )
+
+        # Stage 2: risk
+        violations = self.risk.check(snap)
+        risk_blocked = len(violations) > 0
+        risk_dict = {
+            "blocked": risk_blocked,
+            "violations": [{"reason": v.reason} for v in violations],
+        }
+
+        # Stage 3: strategy (only runs if risk passes)
+        if risk_blocked:
+            strategy_dict = {
+                "skipped": True,
+                "reason": f"Blocked by {len(violations)} risk violation(s)",
+            }
+            decision = Decision(
+                symbol=sym,
+                action="hold",
+                reason=f"Risk block: {violations[0].reason}",
+                confidence="high",
+                context=snapshot_dict,
+            )
+        else:
+            signal = self.strategy.generate(snap)
+            strategy_dict = {
+                "skipped": False,
+                "action": signal.action,
+                "confidence": signal.confidence,
+                "reason": signal.reason,
+            }
+            decision = Decision(
+                symbol=sym,
+                action=signal.action,
+                reason=signal.reason,
+                confidence=signal.confidence,
+                context=snapshot_dict,
+            )
+
+        return PipelineTrace(
+            symbol=sym,
+            snapshot=snapshot_dict,
+            risk=risk_dict,
+            strategy=strategy_dict,
+            decision=decision.to_dict(),
         )

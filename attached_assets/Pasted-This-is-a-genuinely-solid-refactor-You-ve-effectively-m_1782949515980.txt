@@ -1,0 +1,137 @@
+This is a genuinely solid refactor. You’ve effectively moved from a scripted bot to a decision pipeline, which is the correct abstraction shift.
+
+A couple of important architectural observations before you add anything else:
+
+
+🧠 What you’ve now achieved (accurately)
+
+You now have a clean 3-stage pipeline:
+
+1. SnapshotBuilder (data boundary)
+
+Only responsibility: “What is the market + portfolio state?”
+No trading logic contamination
+This is your infrastructure layer
+2. RiskEvaluator (hard constraints)
+
+Deterministic rules only
+No “opinion”, only “block / allow”
+This is your safety layer
+3. StrategyEvaluator (soft logic)
+
+Produces intent, not action enforcement
+Correct separation from risk (very important)
+4. DecisionEngine (orchestrator)
+
+Just sequencing + combining results
+No heavy logic left inside it
+This is basically the same shape used in institutional-style rule engines (simplified, but structurally correct).
+
+
+⚠️ One important architectural warning (this is subtle but important)
+
+You mentioned:
+
+“RiskEvaluator returns list[RiskViolation]”
+
+Good — but make sure of this constraint:
+
+🚫 RiskEvaluator must NEVER depend on:
+
+strategy output
+market assumptions (“this looks risky”)
+historical inference beyond snapshot
+It must remain:
+
+pure function of snapshot → violations
+
+Because otherwise it becomes a second hidden strategy layer.
+
+
+📌 About your next idea:
+
+/debug
+
+endpoint
+
+This is actually a high-value move, but I’d slightly reshape it.
+
+Instead of:
+
+/api/decision/{symbol}/debug
+
+I’d recommend:
+
+✅
+
+/api/decision/{symbol}?debug=true
+
+Why:
+
+keeps API surface minimal
+avoids endpoint explosion
+lets you evolve debug mode into logging later
+
+🔍 What your debug response should include
+
+When debug=true, return:
+
+1. Snapshot (raw state)
+
+price
+positions
+exposure
+open orders
+2. Risk evaluation
+
+violations: [
+  {"type": "MAX_POSITIONS", "detail": "..."}
+]
+3. Strategy output
+
+signal: {
+  "action": "BUY",
+  "confidence": 0.72,
+  "reason": "momentum_breakout"
+}
+
+4. Final decision
+
+decision: "hold"
+
+The real next architectural step (after debug endpoint)
+
+Once debug exists, the system becomes:
+
+fully observable decision pipeline
+
+That’s the point where you can safely:
+
+backtest logic manually
+audit trades
+tune strategy without guessing
+
+🚀 What I recommend next
+
+Add the debug mode first.
+
+Then stop building features for a moment and do this:
+
+👉 “observe → tune → validate loop”
+
+Because at this stage:
+
+your architecture is already strong
+your risk model is already meaningful
+your biggest gains now come from validation, not expansion
+
+If you continue after this, the next real milestone is:
+
+turning StrategyEvaluator into a swappable plugin system (multi-strategy support)
+
+But you’re not there yet.
+
+
+If you want, I can  help you design the debug output shape so it stays stable long-term (this is where most systems accidentally paint themselves into a corner).
+
+
