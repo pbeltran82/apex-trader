@@ -1,0 +1,146 @@
+You’re now at a point where the architecture is no longer “a trading bot” in the casual sense — it’s a traceable decision system with explicit causality, which is exactly what you want before adding complexity.
+
+The ?debug=true design is particularly strong because it enforces a key property:
+
+Same execution path, different visibility — not different logic.
+
+That’s the correct way to avoid “debug-only bugs.”
+
+
+🧠 What you’ve built (structurally)
+
+You now have a full pipeline with observable stages:
+
+1. Snapshot (reality capture)
+
+deterministic
+isolated from strategy
+2. Risk layer (hard gating)
+
+produces full violation set (good choice)
+explicit skip behavior for downstream logic
+3. Strategy layer (intent generation)
+
+explicitly skipped vs executed (important distinction you caught)
+4. Decision layer (composition only)
+
+no hidden logic left
+5. Debug trace (full introspection)
+
+same execution path
+enriched output only
+That combination is what makes systems debuggable at scale.
+
+
+⚠️ One important design checkpoint before you add plugins
+
+You proposed:
+
+“turn StrategyEvaluator into a plugin system with voting”
+
+This is a valid direction, but there’s a hidden trap here:
+
+🚨 Multi-strategy systems fail when they lack a
+
+shared normalization contract
+
+If you go into:
+
+momentum strategy
+mean reversion strategy
+breakout strategy
+…without a strict contract, you’ll get:
+
+inconsistent confidence scales
+incompatible “reasons”
+impossible-to-debug vote weighting
+
+🧭 If you do plugins, you must first define this interface
+
+Before implementing multi-strategy voting, you need:
+
+1. Standard Signal contract
+
+Signal(
+    action: BUY | SELL | HOLD,
+    confidence: float,   # normalized 0–1
+    reason: str,
+    metadata: dict
+)
+
+2. Strategy interface contract
+
+class Strategy:
+    def evaluate(self, snapshot) -> Signal:
+        ...
+
+3. Combiner rule (this is where most systems break)
+
+You must choose ONE:
+
+highest confidence wins (simplest, best early stage)
+weighted voting
+risk-adjusted scoring
+Do NOT let each strategy define its own aggregation logic.
+
+
+🔥 Why your instinct is good, but timing matters
+
+You’re correctly moving toward:
+
+“compare strategies instead of hardcoding one”
+
+But the correct progression is:
+
+Stage 1 (you are here)
+
+single strategy
+fully observable pipeline ✔
+Stage 2 (next)
+
+multiple strategies with identical interface
+no voting yet (just side-by-side debug comparison)
+Stage 3
+
+introduce combiner logic
+Stage 4
+
+ensemble system (real trading architecture)
+
+👍 Recommendation (important)
+
+Instead of immediately building a plugin + voting system, the higher-value next step is:
+
+👉 “multi-strategy dry run mode”
+
+Where:
+
+all strategies run
+no decision is aggregated yet
+debug shows:
+strategies: [
+  { name: "momentum", signal: BUY, confidence: 0.62 },
+  { name: "mean_reversion", signal: HOLD, confidence: 0.41 }
+]
+
+This gives you comparative insight without committing to complexity.
+
+
+🧭 Bottom line
+
+What you just built is already at the level where:
+
+correctness > features
+observability > expansion
+traceability > optimization
+You’re no longer debugging code — you’re validating a system of rules.
+
+
+🚀 If you continue next
+
+The correct next evolution is:
+
+multi-strategy evaluation (no voting yet) + structured comparison output
+
+If you want, I can help you design that layer so it stays extensible without collapsing into “strategy spaghetti” later.
+

@@ -5,17 +5,20 @@ Architecture (layered, inside-out):
 
   API
    └── DecisionEngine.evaluate(symbol)
-         ├── SnapshotBuilder.build()     → MarketSnapshot   (pure data, no logic)
-         ├── RiskEvaluator.check()       → list[RiskViolation]  (hard blocks)
-         └── StrategyEvaluator.generate() → Signal          (soft signals)
+         ├── SnapshotBuilder.build()      → MarketSnapshot        (pure data, no logic)
+         ├── RiskEvaluator.check()        → list[RiskViolation]   (hard blocks)
+         ├── StrategyEvaluator.run_all()  → list[Signal]          (all strategies, no voting yet)
+         └── Combiner.select()            → Signal                (picks winner from list)
 
-Rules for adding new behavior:
-  - New data field?        → add to MarketSnapshot + SnapshotBuilder
-  - New hard constraint?   → add a method to RiskEvaluator
-  - New trading strategy?  → add a method to StrategyEvaluator
-  - Route (main.py)?       → never changes
+Rules for extending the system:
+  - New data field?         → add to MarketSnapshot + SnapshotBuilder
+  - New hard constraint?    → add a method to RiskEvaluator
+  - New trading strategy?   → subclass Strategy, register in StrategyEvaluator
+  - Change how signals mix? → edit Combiner only
+  - Route (main.py)?        → never changes
 """
 
+from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any, Optional
 from alpaca.trading.client import TradingClient
@@ -39,14 +42,19 @@ class EngineConfig:
     max_invested_pct: float = 0.90       # max total equity deployed
     max_open_positions: int = 10         # max distinct holdings
     min_cash_buffer: float = 100.0       # minimum cash to keep ($)
-
-    # Strategy thresholds
     stop_loss_pct: float = -0.05         # sell if unrealized P&L < -5%
     take_profit_pct: float = 0.10        # sell if unrealized P&L > +10%
     min_price: float = 1.0               # penny stock filter
-    lookback_bars: int = 10              # bars used for momentum
+
+    # Momentum strategy
+    lookback_bars: int = 10
     momentum_buy_threshold: float = 0.01
     momentum_sell_threshold: float = -0.01
+
+    # Mean reversion strategy
+    mean_reversion_lookback: int = 10    # bars for rolling mean
+    mean_reversion_buy_threshold: float = -0.02   # buy if price < mean - 2%
+    mean_reversion_sell_threshold: float = 0.02   # sell if price > mean + 2%
 
 
 # ------------------------------------
@@ -61,16 +69,17 @@ class MarketSnapshot:
     """
     symbol: str
     price: float
-    momentum_pct: Optional[float]
-    lookback_bars: int                    # actual bars returned (may be < requested)
+    momentum_pct: Optional[float]        # price change over lookback window
+    lookback_bars: int                   # actual bars returned (may differ from requested)
+    close_prices: list[float]            # historical close prices (for mean reversion etc.)
     equity: float
     cash: float
     invested_pct: float
     open_positions: int
-    existing_position: Optional[Any]      # Alpaca Position object or None
-    position_pct: float                   # this symbol as fraction of portfolio
+    existing_position: Optional[Any]     # Alpaca Position object or None
+    position_pct: float                  # this symbol as fraction of portfolio
     unrealized_plpc: Optional[float]
-    pending_for_symbol: list              # open orders for this symbol
+    pending_for_symbol: list             # open orders for this symbol
 
     def to_context(self) -> dict:
         """Human-readable dict attached to every Decision for transparency."""
@@ -96,9 +105,24 @@ class RiskViolation:
 
 @dataclass
 class Signal:
-    action: str       # "buy" | "sell" | "hold"
+    """
+    Normalized signal contract. Every strategy must produce this exact shape.
+    confidence is always 0.0–1.0 (not a string) so strategies can be compared.
+    """
+    name: str            # strategy that produced this signal
+    action: str          # "buy" | "sell" | "hold"
+    confidence: float    # 0.0 (no conviction) → 1.0 (maximum conviction)
     reason: str
-    confidence: str   # "high" | "medium" | "low"
+    metadata: dict = field(default_factory=dict)
+
+    def to_dict(self) -> dict:
+        return {
+            "name": self.name,
+            "action": self.action,
+            "confidence": round(self.confidence, 3),
+            "reason": self.reason,
+            "metadata": self.metadata,
+        }
 
 
 @dataclass
@@ -106,7 +130,7 @@ class Decision:
     symbol: str
     action: str
     reason: str
-    confidence: str
+    confidence: str      # "high" | "medium" | "low" — derived from float for API consumers
     context: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict:
@@ -123,20 +147,20 @@ class Decision:
 class PipelineTrace:
     """
     Full pipeline trace returned when debug=true.
-    Each stage is a separate dict so callers can inspect any layer independently.
+    Each stage is independently inspectable.
     """
     symbol: str
-    snapshot: dict         # raw MarketSnapshot fields (what the world looks like)
-    risk: dict             # all violations found, plus blocked flag
-    strategy: dict         # signal produced (or skipped if risk blocked)
-    decision: dict         # final Decision output
+    snapshot: dict      # what the world looked like
+    risk: dict          # all violations found, blocked flag
+    strategies: dict    # all signals from all strategies + selected winner
+    decision: dict      # final Decision output
 
     def to_dict(self) -> dict:
         return {
             "symbol": self.symbol,
             "snapshot": self.snapshot,
             "risk": self.risk,
-            "strategy": self.strategy,
+            "strategies": self.strategies,
             "decision": self.decision,
         }
 
@@ -158,6 +182,15 @@ def _normalize_status(raw: str) -> str:
     if clean == "rejected":
         return "rejected"
     return "unknown"
+
+
+def _confidence_label(confidence: float) -> str:
+    """Convert normalized float confidence to API-facing label."""
+    if confidence >= 0.70:
+        return "high"
+    if confidence >= 0.40:
+        return "medium"
+    return "low"
 
 
 # ------------------------------------
@@ -188,8 +221,10 @@ class SnapshotBuilder:
         trade_data = self.data.get_stock_latest_trade(trade_req)
         price = float(trade_data[symbol].price)
 
+        # Use the longer of the two lookback windows so both strategies get their bars
+        lookback_days = max(cfg.lookback_bars, cfg.mean_reversion_lookback)
         end = datetime.now(timezone.utc)
-        start = end - timedelta(days=cfg.lookback_bars * 2)  # buffer for non-trading days
+        start = end - timedelta(days=lookback_days * 2)  # buffer for non-trading days
         bars_req = StockBarsRequest(
             symbol_or_symbols=symbol,
             timeframe=TimeFrame.Day,
@@ -199,7 +234,9 @@ class SnapshotBuilder:
         )
         bars_data = self.data.get_stock_bars(bars_req)
         bars = list(bars_data[symbol]) if symbol in bars_data else []
-        bars = bars[-cfg.lookback_bars:]
+        bars = bars[-lookback_days:]
+
+        close_prices = [float(b.close) for b in bars]
         open_price = float(bars[0].open) if bars else None
         momentum_pct = ((price - open_price) / open_price) if open_price else None
 
@@ -226,6 +263,7 @@ class SnapshotBuilder:
             price=price,
             momentum_pct=momentum_pct,
             lookback_bars=len(bars),
+            close_prices=close_prices,
             equity=equity,
             cash=cash,
             invested_pct=invested / equity if equity > 0 else 0.0,
@@ -245,8 +283,6 @@ class RiskEvaluator:
     """
     Hard constraints only. Each check is independent.
     Returns ALL violations found — not just the first.
-    The engine uses the first violation as the hold reason,
-    but callers can inspect the full list for diagnostics.
     """
 
     def __init__(self, config: EngineConfig):
@@ -319,55 +355,190 @@ class RiskEvaluator:
 
 
 # ------------------------------------
-# LAYER 3 — STRATEGY EVALUATOR (soft signals)
+# LAYER 3 — STRATEGY INTERFACE + IMPLEMENTATIONS
 # ------------------------------------
 
-class StrategyEvaluator:
+class Strategy(ABC):
     """
-    Pure strategy logic. Only runs after all risk gates pass.
-    Each method is an independent strategy; first match wins.
-    To add a new strategy: add a method and register it in _strategies().
+    Shared contract every strategy must satisfy.
+    - evaluate() must always return a Signal (never None, never raise)
+    - confidence must be in [0.0, 1.0]
+    - action must be "buy", "sell", or "hold"
     """
+
+    @property
+    @abstractmethod
+    def name(self) -> str:
+        """Stable identifier used in debug output and combiner logic."""
+        ...
+
+    @abstractmethod
+    def evaluate(self, snap: MarketSnapshot) -> Signal:
+        ...
+
+
+class MomentumStrategy(Strategy):
+    """
+    Trend-following: buy when price is up over the lookback window,
+    sell when it's down. Conviction scales with magnitude of the move.
+    """
+
+    name = "momentum"
 
     def __init__(self, config: EngineConfig):
         self.config = config
 
-    def generate(self, snap: MarketSnapshot) -> Signal:
-        for strategy in self._strategies():
-            signal = strategy(snap)
-            if signal is not None:
-                return signal
+    def evaluate(self, snap: MarketSnapshot) -> Signal:
+        m = snap.momentum_pct
+        cfg = self.config
+
+        if m is None or snap.lookback_bars < cfg.lookback_bars:
+            return Signal(
+                name=self.name,
+                action="hold",
+                confidence=0.10,
+                reason=f"Insufficient price history (got {snap.lookback_bars} bars, need {cfg.lookback_bars})",
+            )
+
+        if m >= cfg.momentum_buy_threshold and not snap.existing_position:
+            # Scale confidence linearly: threshold → 0.55, 3× threshold → 0.85
+            raw = min(abs(m) / cfg.momentum_buy_threshold, 3.0)
+            confidence = round(0.55 + (raw - 1) / 2 * 0.30, 3)
+            return Signal(
+                name=self.name,
+                action="buy",
+                confidence=min(confidence, 0.85),
+                reason=f"Price up {m*100:.2f}% over {snap.lookback_bars} bars (threshold +{cfg.momentum_buy_threshold*100:.1f}%)",
+                metadata={"momentum_pct": round(m, 4)},
+            )
+
+        if m <= cfg.momentum_sell_threshold and snap.existing_position:
+            raw = min(abs(m) / abs(cfg.momentum_sell_threshold), 3.0)
+            confidence = round(0.55 + (raw - 1) / 2 * 0.30, 3)
+            return Signal(
+                name=self.name,
+                action="sell",
+                confidence=min(confidence, 0.85),
+                reason=f"Price down {m*100:.2f}% over {snap.lookback_bars} bars (threshold {cfg.momentum_sell_threshold*100:.1f}%)",
+                metadata={"momentum_pct": round(m, 4)},
+            )
+
         return Signal(
+            name=self.name,
             action="hold",
-            reason="No clear signal — conditions do not meet any strategy threshold",
-            confidence="low",
+            confidence=0.30,
+            reason=f"Momentum {m*100:.2f}% within neutral band [{cfg.momentum_sell_threshold*100:.1f}%, +{cfg.momentum_buy_threshold*100:.1f}%]",
+            metadata={"momentum_pct": round(m, 4)},
         )
 
-    def _strategies(self):
-        return [self._momentum]
 
-    def _momentum(self, snap: MarketSnapshot) -> Optional[Signal]:
-        m = snap.momentum_pct
-        if m is None:
-            return Signal(
-                action="hold",
-                reason=f"Insufficient price history for momentum (got {snap.lookback_bars} bars, need {self.config.lookback_bars})",
-                confidence="low",
-            )
+class MeanReversionStrategy(Strategy):
+    """
+    Counter-trend: buy when price is significantly below its rolling mean
+    (oversold), sell when significantly above (overbought).
+    Complements momentum — they often disagree, making the comparison valuable.
+    """
+
+    name = "mean_reversion"
+
+    def __init__(self, config: EngineConfig):
+        self.config = config
+
+    def evaluate(self, snap: MarketSnapshot) -> Signal:
         cfg = self.config
-        if m >= cfg.momentum_buy_threshold and not snap.existing_position:
+        prices = snap.close_prices[-cfg.mean_reversion_lookback:]
+
+        if len(prices) < cfg.mean_reversion_lookback:
             return Signal(
+                name=self.name,
+                action="hold",
+                confidence=0.10,
+                reason=f"Insufficient price history (got {len(prices)} bars, need {cfg.mean_reversion_lookback})",
+            )
+
+        mean = sum(prices) / len(prices)
+        deviation = (snap.price - mean) / mean  # signed: negative = below mean
+
+        if deviation <= cfg.mean_reversion_buy_threshold and not snap.existing_position:
+            raw = min(abs(deviation) / abs(cfg.mean_reversion_buy_threshold), 3.0)
+            confidence = round(0.50 + (raw - 1) / 2 * 0.25, 3)
+            return Signal(
+                name=self.name,
                 action="buy",
-                reason=f"Momentum buy: price up {m*100:.2f}% over {snap.lookback_bars} bars (threshold +{cfg.momentum_buy_threshold*100:.1f}%)",
-                confidence="medium",
+                confidence=min(confidence, 0.75),
+                reason=f"Price {deviation*100:.2f}% below {cfg.mean_reversion_lookback}-bar mean ${mean:.2f} (oversold threshold {cfg.mean_reversion_buy_threshold*100:.1f}%)",
+                metadata={"deviation_pct": round(deviation, 4), "mean": round(mean, 2)},
             )
-        if m <= cfg.momentum_sell_threshold and snap.existing_position:
+
+        if deviation >= cfg.mean_reversion_sell_threshold and snap.existing_position:
+            raw = min(abs(deviation) / abs(cfg.mean_reversion_sell_threshold), 3.0)
+            confidence = round(0.50 + (raw - 1) / 2 * 0.25, 3)
             return Signal(
+                name=self.name,
                 action="sell",
-                reason=f"Momentum sell: price down {m*100:.2f}% over {snap.lookback_bars} bars (threshold {cfg.momentum_sell_threshold*100:.1f}%)",
-                confidence="medium",
+                confidence=min(confidence, 0.75),
+                reason=f"Price {deviation*100:.2f}% above {cfg.mean_reversion_lookback}-bar mean ${mean:.2f} (overbought threshold +{cfg.mean_reversion_sell_threshold*100:.1f}%)",
+                metadata={"deviation_pct": round(deviation, 4), "mean": round(mean, 2)},
             )
-        return None
+
+        return Signal(
+            name=self.name,
+            action="hold",
+            confidence=0.25,
+            reason=f"Price {deviation*100:.2f}% from mean ${mean:.2f} — within reversion band",
+            metadata={"deviation_pct": round(deviation, 4), "mean": round(mean, 2)},
+        )
+
+
+# ------------------------------------
+# LAYER 3 — COMBINER
+# ------------------------------------
+
+class Combiner:
+    """
+    Selects one Signal from a list produced by all strategies.
+    Current rule: highest-confidence non-hold wins; ties broken by list order.
+    If all strategies hold, picks the highest-confidence hold.
+
+    This is the ONLY place aggregation logic lives. Swapping strategy logic
+    never touches this; swapping combination logic never touches strategies.
+    """
+
+    RULE = "highest_confidence_non_hold_wins"
+
+    def select(self, signals: list[Signal]) -> Signal:
+        actionable = [s for s in signals if s.action != "hold"]
+        pool = actionable if actionable else signals
+        return max(pool, key=lambda s: s.confidence)
+
+
+# ------------------------------------
+# LAYER 3 — STRATEGY EVALUATOR (orchestrates strategies + combiner)
+# ------------------------------------
+
+class StrategyEvaluator:
+    """
+    Runs all registered strategies against the snapshot.
+    Returns the full list (for debug visibility) and the selected winner.
+    To add a strategy: instantiate it and add to self._strategies list.
+    """
+
+    def __init__(self, config: EngineConfig):
+        self._strategies: list[Strategy] = [
+            MomentumStrategy(config),
+            MeanReversionStrategy(config),
+        ]
+        self._combiner = Combiner()
+
+    def run_all(self, snap: MarketSnapshot) -> tuple[list[Signal], Signal]:
+        """
+        Returns (all_signals, selected_signal).
+        all_signals is the full unfiltered output of every strategy.
+        selected_signal is what the combiner chose.
+        """
+        signals = [s.evaluate(snap) for s in self._strategies]
+        selected = self._combiner.select(signals)
+        return signals, selected
 
 
 # ------------------------------------
@@ -377,7 +548,7 @@ class StrategyEvaluator:
 class DecisionEngine:
     """
     Thin orchestrator. Owns no logic of its own.
-    Delegates entirely to the three layers above.
+    Delegates entirely to the four layers above.
     """
 
     def __init__(
@@ -416,20 +587,19 @@ class DecisionEngine:
                 context=context,
             )
 
-        signal = self.strategy.generate(snap)
+        _, selected = self.strategy.run_all(snap)
         return Decision(
             symbol=sym,
-            action=signal.action,
-            reason=signal.reason,
-            confidence=signal.confidence,
+            action=selected.action,
+            reason=selected.reason,
+            confidence=_confidence_label(selected.confidence),
             context=context,
         )
 
     def evaluate_debug(self, symbol: str) -> PipelineTrace:
         """
-        Runs the full pipeline and returns every intermediate result.
-        Nothing extra is computed — this is the same path as evaluate(),
-        just with each stage's output captured and returned.
+        Same execution path as evaluate(). Returns every intermediate result.
+        Nothing extra is computed — visibility only, no divergent logic.
         """
         sym = symbol.upper()
 
@@ -437,16 +607,14 @@ class DecisionEngine:
         try:
             snap = self.snapshot_builder.build(sym)
             snapshot_dict = snap.to_context()
-            snapshot_error = None
         except Exception as e:
             error_msg = str(e)
-            decision = Decision(sym, "hold", f"Snapshot failed: {error_msg}", "low")
             return PipelineTrace(
                 symbol=sym,
                 snapshot={"error": error_msg},
                 risk={"blocked": True, "violations": [], "error": "snapshot failed"},
-                strategy={"skipped": True, "reason": "snapshot failed"},
-                decision=decision.to_dict(),
+                strategies={"skipped": True, "reason": "snapshot failed", "all": [], "selected": None},
+                decision=Decision(sym, "hold", f"Snapshot failed: {error_msg}", "low").to_dict(),
             )
 
         # Stage 2: risk
@@ -457,12 +625,17 @@ class DecisionEngine:
             "violations": [{"reason": v.reason} for v in violations],
         }
 
-        # Stage 3: strategy (only runs if risk passes)
+        # Stage 3: strategies (runs even when risk blocked — for observability)
+        all_signals, selected = self.strategy.run_all(snap)
+        strategies_dict = {
+            "combiner_rule": self.strategy._combiner.RULE,
+            "skipped_by_risk": risk_blocked,
+            "all": [s.to_dict() for s in all_signals],
+            "selected": selected.to_dict(),
+        }
+
+        # Stage 4: decision
         if risk_blocked:
-            strategy_dict = {
-                "skipped": True,
-                "reason": f"Blocked by {len(violations)} risk violation(s)",
-            }
             decision = Decision(
                 symbol=sym,
                 action="hold",
@@ -471,18 +644,11 @@ class DecisionEngine:
                 context=snapshot_dict,
             )
         else:
-            signal = self.strategy.generate(snap)
-            strategy_dict = {
-                "skipped": False,
-                "action": signal.action,
-                "confidence": signal.confidence,
-                "reason": signal.reason,
-            }
             decision = Decision(
                 symbol=sym,
-                action=signal.action,
-                reason=signal.reason,
-                confidence=signal.confidence,
+                action=selected.action,
+                reason=selected.reason,
+                confidence=_confidence_label(selected.confidence),
                 context=snapshot_dict,
             )
 
@@ -490,6 +656,6 @@ class DecisionEngine:
             symbol=sym,
             snapshot=snapshot_dict,
             risk=risk_dict,
-            strategy=strategy_dict,
+            strategies=strategies_dict,
             decision=decision.to_dict(),
         )
