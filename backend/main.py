@@ -8,6 +8,7 @@ from alpaca.trading.enums import OrderSide, TimeInForce, QueryOrderStatus
 from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.requests import StockLatestTradeRequest, StockBarsRequest
 from alpaca.data.timeframe import TimeFrame
+from engine import DecisionEngine, EngineConfig
 
 app = FastAPI(title="Apex Trader API")
 
@@ -29,6 +30,13 @@ client = TradingClient(
 data_client = StockHistoricalDataClient(
     os.getenv("ALPACA_API_KEY"),
     os.getenv("ALPACA_SECRET_KEY")
+)
+
+# Decision engine — instantiated once, reused across requests
+engine = DecisionEngine(
+    trading_client=client,
+    data_client=data_client,
+    config=EngineConfig(),
 )
 
 # ------------------------------------
@@ -209,6 +217,18 @@ def get_exposure():
             },
             "symbol_exposure": symbol_exposure,
         }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+# ------------------------------------
+# DECISION ENGINE (thin wrapper only)
+# ------------------------------------
+
+@app.get("/api/decision/{symbol}")
+def get_decision(symbol: str):
+    try:
+        result = engine.evaluate(symbol)
+        return result.to_dict()
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
