@@ -37,3 +37,8 @@ externalPort = 80
 [deployment]
 deploymentTarget = "autoscale"
 run = ["gunicorn", "--bind=0.0.0.0:5000", "--reuse-port", "--chdir", "backend", "main:app", "-k", "uvicorn.workers.UvicornWorker"]
+
+[userenv]
+
+[userenv.shared]
+ALPACA_PAPER = "true"
