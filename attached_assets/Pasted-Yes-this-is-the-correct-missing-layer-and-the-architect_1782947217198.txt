@@ -1,0 +1,116 @@
+Yes — this is the correct missing layer, and the architecture framing is solid.
+
+So let’s do the next concrete step cleanly: add a proper market data layer that your future decision engine can rely on.
+
+
+✅ COPY / PASTE:
+
+/api/market/{symbol}
+
+(clean + correct)
+
+Add this to your main.py (and make sure imports are at the top):
+
+
+import os
+from fastapi import FastAPI
+from alpaca.data.historical import StockHistoricalDataClient
+from alpaca.data.requests import StockLatestTradeRequest
+
+app = FastAPI()
+
+# Market data client (READ-ONLY, safe)
+data_client = StockHistoricalDataClient(
+    os.getenv("ALPACA_API_KEY"),
+    os.getenv("ALPACA_SECRET_KEY")
+)
+
+📊 Market endpoint
+
+@app.get("/api/market/{symbol}")
+def get_market_data(symbol: str):
+    try:
+        request = StockLatestTradeRequest(symbol_or_symbols=symbol.upper())
+        trade_data = data_client.get_stock_latest_trade(request)
+
+        trade = trade_data[symbol.upper()]
+
+        return {
+            "symbol": symbol.upper(),
+            "price": float(trade.price),
+            "timestamp": trade.timestamp,
+            "exchange": trade.exchange
+        }
+
+    except Exception as e:
+        return {"error": str(e)}
+
+
+Why this is the correct next layer
+
+Now your system has a true separation of concerns:
+
+✔ Execution layer
+
+/api/paper-order
+✔ Risk layer
+
+exposure + limits
+✔ State layer
+
+/api/account
+/api/positions
+/api/orders
+✔ Market layer (YOU JUST ADDED THIS)
+
+/api/market/{symbol}
+
+🔥 What this unlocks (important)
+
+Now you can finally build logic that is NOT guessing:
+
+current price is known
+portfolio exposure is known
+order state is known
+So when you build the decision engine, it can actually answer:
+
+“Do I take this trade right now or not?”
+
+without hallucinating missing data.
+
+
+⚠️ One important correction (architecture improvement)
+
+Right now you have:
+
+
+StockHistoricalDataClient(API_KEY, SECRET_KEY)
+
+That’s fine for paper trading, but best practice is:
+
+treat market data as read-only subsystem
+never reuse trading client for data logic
+You already did that correctly here.
+
+
+🚀 Next step (now it actually makes sense)
+
+Now — and only now — you are ready for:
+
+👉 Decision Layer v1
+
+This will combine:
+
+market price
+exposure rules
+order state
+simple strategy logic
+
+If you say:
+
+“build decision layer properly”
+
+I’ll design it as a real engine (not just a /signal endpoint) — something that can later evolve into automated trading without rewrites.
+
+
+

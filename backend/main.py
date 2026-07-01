@@ -5,6 +5,9 @@ from pydantic import BaseModel
 from alpaca.trading.client import TradingClient
 from alpaca.trading.requests import MarketOrderRequest, GetOrdersRequest
 from alpaca.trading.enums import OrderSide, TimeInForce, QueryOrderStatus
+from alpaca.data.historical import StockHistoricalDataClient
+from alpaca.data.requests import StockLatestTradeRequest, StockBarsRequest
+from alpaca.data.timeframe import TimeFrame
 
 app = FastAPI(title="Apex Trader API")
 
@@ -20,6 +23,12 @@ client = TradingClient(
     os.getenv("ALPACA_API_KEY"),
     os.getenv("ALPACA_SECRET_KEY"),
     paper=True
+)
+
+# Read-only market data client — never used for order execution
+data_client = StockHistoricalDataClient(
+    os.getenv("ALPACA_API_KEY"),
+    os.getenv("ALPACA_SECRET_KEY")
 )
 
 # ------------------------------------
@@ -199,6 +208,27 @@ def get_exposure():
                 "low_cash": snap["cash"] < MIN_CASH_BUFFER,
             },
             "symbol_exposure": symbol_exposure,
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+# ------------------------------------
+# MARKET DATA (read-only layer)
+# ------------------------------------
+
+@app.get("/api/market/{symbol}")
+def get_market_data(symbol: str):
+    try:
+        sym = symbol.upper()
+        request = StockLatestTradeRequest(symbol_or_symbols=sym)
+        trade_data = data_client.get_stock_latest_trade(request)
+        trade = trade_data[sym]
+        return {
+            "symbol": sym,
+            "price": float(trade.price),
+            "size": float(trade.size),
+            "exchange": trade.exchange,
+            "timestamp": trade.timestamp.isoformat() if trade.timestamp else None,
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
