@@ -1,51 +1,58 @@
+Yes — here’s a clean FastAPI drop-in version you can paste into Replit.
+
+This includes:
+
+Alpaca client (alpaca-py)
+/api/account
+/api/positions
+proper FastAPI setup
+
+✅ COPY / PASTE THIS INTO YOUR
+
+main.py
+
 import os
-from fastapi import FastAPI, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
+from fastapi import FastAPI
 from alpaca.trading.client import TradingClient
 
-app = FastAPI(title="Apex Trader API")
+app = FastAPI()
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
+# --- Alpaca Client (paper trading) ---
 client = TradingClient(
     os.getenv("ALPACA_API_KEY"),
     os.getenv("ALPACA_SECRET_KEY"),
     paper=True
 )
 
-@app.get("/")
-def root():
-    return {"status": "Apex Trader is running"}
-
-@app.get("/health")
-def health():
-    return {"status": "ok"}
-
+# -----------------------------
+# ACCOUNT ENDPOINT
+# -----------------------------
 @app.get("/api/account")
 def get_account():
     try:
         account = client.get_account()
+
         return {
             "status": str(account.status),
             "cash": float(account.cash),
             "buying_power": float(account.buying_power),
             "portfolio_value": float(account.portfolio_value),
             "equity": float(account.equity),
-            "currency": account.currency,
+            "currency": account.currency
         }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
 
+    except Exception as e:
+        return {"error": str(e)}
+
+
+# -----------------------------
+# POSITIONS ENDPOINT
+# -----------------------------
 @app.get("/api/positions")
 def get_positions():
     try:
         positions = client.get_all_positions()
+
         return [
             {
                 "symbol": p.symbol,
@@ -57,5 +64,32 @@ def get_positions():
             }
             for p in positions
         ]
+
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        return {"error": str(e)}
+
+
+ALSO MAKE SURE THIS IS INSTALLED
+
+In Replit Shell:
+
+
+pip install alpaca-py fastapi uvicorn
+
+
+RUN COMMAND (if needed)
+
+If Replit doesn’t auto-run FastAPI, use:
+
+
+uvicorn main:app --host 0.0.0.0 --port 3000
+
+IMPORTANT CHECKLIST
+
+Before running:
+
+Secrets are set:
+ALPACA_API_KEY
+ALPACA_SECRET_KEY
+You are in paper trading mode
+You did NOT paste keys into code
