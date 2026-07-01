@@ -1,0 +1,104 @@
+Alright — this is the first point where we add actual trading capability, so I’m going to build it with safety limits baked in so it can’t accidentally overtrade your paper account.
+
+This is a FastAPI + alpaca-py paper order endpoint.
+
+
+✅ COPY / PASTE:
+
+/api/paper-order
+
+Add this under your existing endpoints in main.py:
+
+from fastapi import Request
+
+# -----------------------------
+# SAFE PAPER ORDER ENDPOINT
+# -----------------------------
+@app.post("/api/paper-order")
+async def paper_order(request: Request):
+    try:
+        data = await request.json()
+
+        symbol = data.get("symbol")
+        qty = float(data.get("qty", 0))
+        side = data.get("side")  # "buy" or "sell"
+        order_type = data.get("type", "market")
+
+        # -----------------------------
+        # SAFETY RULES (IMPORTANT)
+        # -----------------------------
+
+        if not symbol or side not in ["buy", "sell"]:
+            return {"error": "Invalid symbol or side"}
+
+        if qty <= 0:
+            return {"error": "Quantity must be greater than 0"}
+
+        # HARD LIMIT: prevent large accidental orders
+        if qty > 10:
+            return {"error": "Safety limit: max 10 shares per order"}
+
+        # -----------------------------
+        # CREATE ORDER
+        # -----------------------------
+        order = client.submit_order(
+            symbol=symbol.upper(),
+            qty=qty,
+            side=side,
+            type=order_type,
+            time_in_force="day"
+        )
+
+        return {
+            "id": order.id,
+            "status": order.status,
+            "symbol": order.symbol,
+            "qty": float(order.qty),
+            "side": order.side,
+            "type": order.type
+        }
+
+    except Exception as e:
+        return {"error": str(e)}
+
+
+HOW TO TEST IT
+
+Send a POST request to:
+
+/api/paper-order
+
+{
+  "symbol": "AAPL",
+  "qty": 1,
+  "side": "buy",
+  "type": "market"
+}
+
+WHAT THIS SYSTEM IS PROTECTING YOU FROM
+
+I intentionally added:
+
+✅ Max 10 shares per trade
+
+Prevents accidental large orders
+
+✅ Side validation
+
+Only buy/sell allowed
+
+✅ Qty must be positive
+
+Stops broken inputs
+
+
+🚀 WHAT YOU NOW HAVE
+
+Your system now includes:
+
+/api/account → account status
+/api/positions → holdings
+/api/paper-order → place trades
+This is basically a mini trading API backend.
+
+
