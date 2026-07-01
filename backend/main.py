@@ -3,8 +3,8 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from alpaca.trading.client import TradingClient
-from alpaca.trading.requests import MarketOrderRequest, LimitOrderRequest
-from alpaca.trading.enums import OrderSide, TimeInForce
+from alpaca.trading.requests import MarketOrderRequest, GetOrdersRequest
+from alpaca.trading.enums import OrderSide, TimeInForce, QueryOrderStatus
 
 app = FastAPI(title="Apex Trader API")
 
@@ -22,11 +22,22 @@ client = TradingClient(
     paper=True
 )
 
+# ------------------------------------
+# SAFETY CONFIG (single place to edit)
+# ------------------------------------
+MAX_ORDER_QTY = 10
+MIN_CASH_BUFFER = 100.0
+ALLOWED_SYMBOLS = None  # Set to a list like ["AAPL","TSLA","SPY"] to restrict, or None to allow all
+
 class OrderRequest(BaseModel):
     symbol: str
     qty: float
     side: str
     type: str = "market"
+
+# ------------------------------------
+# CORE ENDPOINTS
+# ------------------------------------
 
 @app.get("/")
 def root():
@@ -69,32 +80,76 @@ def get_positions():
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.get("/api/orders")
+def get_orders(limit: int = 20):
+    try:
+        request = GetOrdersRequest(
+            status=QueryOrderStatus.ALL,
+            limit=min(limit, 50),
+        )
+        orders = client.get_orders(request)
+        return [
+            {
+                "id": str(o.id),
+                "symbol": o.symbol,
+                "side": str(o.side),
+                "qty": float(o.qty) if o.qty else None,
+                "status": str(o.status),
+                "filled_avg_price": float(o.filled_avg_price) if o.filled_avg_price else None,
+                "created_at": o.created_at.isoformat() if o.created_at else None,
+            }
+            for o in orders
+        ]
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+# ------------------------------------
+# ORDER PLACEMENT (with safety layer)
+# ------------------------------------
+
 @app.post("/api/paper-order")
 def paper_order(order: OrderRequest):
+    symbol = order.symbol.strip().upper()
+
+    # Validate side
     if order.side not in ["buy", "sell"]:
         raise HTTPException(status_code=400, detail="Invalid side — must be 'buy' or 'sell'")
 
+    # Validate qty
     if order.qty <= 0:
         raise HTTPException(status_code=400, detail="Quantity must be greater than 0")
 
-    if order.qty > 10:
-        raise HTTPException(status_code=400, detail="Safety limit: max 10 shares per order")
+    # Hard cap on order size
+    if order.qty > MAX_ORDER_QTY:
+        raise HTTPException(status_code=400, detail=f"Safety limit: max {MAX_ORDER_QTY} shares per order")
+
+    # Symbol allowlist (if configured)
+    if ALLOWED_SYMBOLS and symbol not in ALLOWED_SYMBOLS:
+        raise HTTPException(status_code=400, detail=f"{symbol} is not in the allowed symbols list")
+
+    # Reject if cash is too low (buy orders only)
+    if order.side == "buy":
+        try:
+            account = client.get_account()
+            if float(account.cash) < MIN_CASH_BUFFER:
+                raise HTTPException(status_code=400, detail=f"Insufficient cash — minimum buffer is ${MIN_CASH_BUFFER}")
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Could not verify account cash: {str(e)}")
+
+    # Only market orders supported currently
+    if order.type != "market":
+        raise HTTPException(status_code=400, detail="Only 'market' order type is supported currently")
 
     try:
-        side = OrderSide.BUY if order.side == "buy" else OrderSide.SELL
-
-        if order.type == "market":
-            order_data = MarketOrderRequest(
-                symbol=order.symbol.upper(),
-                qty=order.qty,
-                side=side,
-                time_in_force=TimeInForce.DAY,
-            )
-        else:
-            raise HTTPException(status_code=400, detail="Only 'market' order type is supported currently")
-
+        order_data = MarketOrderRequest(
+            symbol=symbol,
+            qty=order.qty,
+            side=OrderSide.BUY if order.side == "buy" else OrderSide.SELL,
+            time_in_force=TimeInForce.DAY,
+        )
         result = client.submit_order(order_data)
-
         return {
             "id": str(result.id),
             "status": str(result.status),
