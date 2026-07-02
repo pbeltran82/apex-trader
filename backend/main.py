@@ -10,8 +10,9 @@ from alpaca.trading.enums import OrderSide, TimeInForce, QueryOrderStatus
 from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.requests import StockLatestTradeRequest, StockBarsRequest
 from alpaca.data.timeframe import TimeFrame
-from engine import DecisionEngine, EngineConfig, PipelineTrace, TradeAttribution
+from engine import DecisionEngine, EngineConfig, PipelineTrace, TradeAttribution, AVAILABLE_COMBINERS
 from backtest import BacktestEngine, BacktestConfig
+from replay import ReplayEngine
 
 app = FastAPI(title="Apex Trader API")
 
@@ -336,6 +337,7 @@ def scan(request: ScanRequest):
 # ------------------------------------
 
 bt_engine = BacktestEngine(data_client=data_client, engine_config=EngineConfig())
+replay_engine = ReplayEngine(data_client=data_client, engine_config=EngineConfig())
 
 
 class BacktestRequest(BaseModel):
@@ -344,6 +346,55 @@ class BacktestRequest(BaseModel):
     end: str = Field(..., description="ISO date, e.g. 2024-12-31")
     initial_cash: float = Field(default=100_000.0, gt=0)
     shares_per_trade: int = Field(default=1, ge=1, le=100)
+
+
+@app.post("/api/replay")
+def run_replay(request: BacktestRequest, policies: str = "highest_confidence,weighted_voting,consensus"):
+    """
+    Counterfactual policy comparison.
+    Fetches bars once, builds a fixed snapshot stream, then runs each requested
+    combiner policy over identical risk + strategy data.
+
+    Query param `policies` is a comma-separated list of combiner names.
+    Valid values: highest_confidence, weighted_voting, consensus
+    Defaults to all three for side-by-side comparison.
+    """
+    try:
+        start_dt = datetime.fromisoformat(request.start).replace(tzinfo=timezone.utc)
+        end_dt = datetime.fromisoformat(request.end).replace(tzinfo=timezone.utc)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=f"Invalid date format: {e}")
+
+    if end_dt <= start_dt:
+        raise HTTPException(status_code=422, detail="end must be after start")
+    if (end_dt - start_dt).days < 30:
+        raise HTTPException(status_code=422, detail="Date range must be at least 30 days")
+
+    policy_names = [p.strip() for p in policies.split(",") if p.strip()]
+    unknown = [p for p in policy_names if p not in AVAILABLE_COMBINERS]
+    if unknown:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Unknown policies: {unknown}. Valid: {list(AVAILABLE_COMBINERS.keys())}",
+        )
+
+    try:
+        from backtest import BacktestConfig
+        bt_config = BacktestConfig(
+            symbol=request.symbol,
+            start=start_dt,
+            end=end_dt,
+            initial_cash=request.initial_cash,
+            shares_per_trade=request.shares_per_trade,
+        )
+        results = replay_engine.run(bt_config, policy_names)
+        return {
+            "symbol": request.symbol.upper(),
+            "period": {"start": request.start, "end": request.end},
+            "policies": results,
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.post("/api/backtest")

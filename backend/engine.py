@@ -56,6 +56,10 @@ class EngineConfig:
     mean_reversion_buy_threshold: float = -0.02   # buy if price < mean - 2%
     mean_reversion_sell_threshold: float = 0.02   # sell if price > mean + 2%
 
+    # Breakout strategy
+    breakout_lookback: int = 10          # bars for recent high/low range
+    breakout_atr_factor: float = 0.005   # min range width to consider valid (0.5% of price)
+
 
 # ------------------------------------
 # LAYER 0 — SHARED TYPES
@@ -513,18 +517,108 @@ class MeanReversionStrategy(Strategy):
         )
 
 
+class BreakoutStrategy(Strategy):
+    """
+    Breakout / breakdown detection.
+    Buys when price closes above the recent high (upward breakout).
+    Sells when price closes below the recent low (breakdown).
+
+    Intentionally conflicts with MeanReversionStrategy:
+      - New high → Breakout: buy,  MeanReversion: sell (overbought)
+      - New low  → Breakout: sell, MeanReversion: buy  (oversold)
+
+    This conflict is valuable — it creates multi-way votes that expose real
+    differences between combiners (especially consensus vs. highest_confidence).
+    """
+
+    name = "breakout"
+
+    def __init__(self, config: EngineConfig):
+        self.config = config
+
+    def evaluate(self, snap: MarketSnapshot) -> Signal:
+        cfg = self.config
+        prices = snap.close_prices
+
+        if len(prices) < cfg.breakout_lookback + 1:
+            return Signal(
+                name=self.name,
+                action="hold",
+                confidence=0.10,
+                reason=f"Insufficient price history ({len(prices)} bars, need {cfg.breakout_lookback + 1})",
+            )
+
+        # Use all bars except the current one to define the range
+        lookback = prices[-(cfg.breakout_lookback + 1):-1]
+        recent_high = max(lookback)
+        recent_low = min(lookback)
+        current = snap.price
+        range_width = recent_high - recent_low
+
+        # Skip if range is too narrow (consolidation noise)
+        min_range = current * cfg.breakout_atr_factor
+        if range_width < min_range:
+            return Signal(
+                name=self.name,
+                action="hold",
+                confidence=0.15,
+                reason=f"Range too narrow (${range_width:.2f} < ${min_range:.2f} threshold)",
+                metadata={"recent_high": round(recent_high, 2), "recent_low": round(recent_low, 2)},
+            )
+
+        if current > recent_high and not snap.existing_position:
+            breakout_pct = (current - recent_high) / recent_high
+            raw = min(breakout_pct / cfg.breakout_atr_factor, 3.0)
+            confidence = round(min(0.55 + raw * 0.10, 0.90), 3)
+            return Signal(
+                name=self.name,
+                action="buy",
+                confidence=confidence,
+                reason=f"Price ${current:.2f} broke above {cfg.breakout_lookback}-bar high ${recent_high:.2f} (+{breakout_pct*100:.2f}%)",
+                metadata={"recent_high": round(recent_high, 2), "breakout_pct": round(breakout_pct, 4)},
+            )
+
+        if current < recent_low and snap.existing_position:
+            breakdown_pct = (recent_low - current) / recent_low
+            raw = min(breakdown_pct / cfg.breakout_atr_factor, 3.0)
+            confidence = round(min(0.55 + raw * 0.10, 0.90), 3)
+            return Signal(
+                name=self.name,
+                action="sell",
+                confidence=confidence,
+                reason=f"Price ${current:.2f} broke below {cfg.breakout_lookback}-bar low ${recent_low:.2f} (-{breakdown_pct*100:.2f}%)",
+                metadata={"recent_low": round(recent_low, 2), "breakdown_pct": round(breakdown_pct, 4)},
+            )
+
+        return Signal(
+            name=self.name,
+            action="hold",
+            confidence=0.20,
+            reason=f"Price within range [${recent_low:.2f} – ${recent_high:.2f}]",
+            metadata={"recent_high": round(recent_high, 2), "recent_low": round(recent_low, 2)},
+        )
+
+
 # ------------------------------------
 # LAYER 3 — COMBINER
 # ------------------------------------
 
-class Combiner:
+class CombinerBase(ABC):
     """
-    Selects one Signal from a list produced by all strategies.
-    Current rule: highest-confidence non-hold wins; ties broken by list order.
-    If all strategies hold, picks the highest-confidence hold.
+    Abstract base for all combiners.
+    Each combiner is a pure function: list[Signal] → Signal.
+    Subclass, set RULE, implement select().
+    """
+    RULE: str = ""
 
-    This is the ONLY place aggregation logic lives. Swapping strategy logic
-    never touches this; swapping combination logic never touches strategies.
+    @abstractmethod
+    def select(self, signals: list[Signal]) -> Signal: ...
+
+
+class Combiner(CombinerBase):
+    """
+    Default combiner: highest-confidence non-hold wins.
+    If all strategies hold, picks the highest-confidence hold.
     """
 
     RULE = "highest_confidence_non_hold_wins"
@@ -533,6 +627,72 @@ class Combiner:
         actionable = [s for s in signals if s.action != "hold"]
         pool = actionable if actionable else signals
         return max(pool, key=lambda s: s.confidence)
+
+
+class WeightedVotingCombiner(CombinerBase):
+    """
+    Aggregates signals by summing confidence scores per action.
+    The action with the highest total weight wins.
+    Useful when multiple strategies should temper each other rather than yield to
+    the single most-confident signal.
+    """
+
+    RULE = "weighted_voting"
+
+    def select(self, signals: list[Signal]) -> Signal:
+        from collections import defaultdict
+        weights: dict[str, float] = defaultdict(float)
+        for s in signals:
+            weights[s.action] += s.confidence
+
+        winning_action = max(weights, key=weights.__getitem__)
+        candidates = [s for s in signals if s.action == winning_action]
+        return max(candidates, key=lambda s: s.confidence)
+
+
+class ConsensusCombiner(CombinerBase):
+    """
+    Only acts when ALL actionable strategies agree on the same direction.
+    Any conflict (e.g. one buy + one sell) forces a hold.
+    Produces far fewer trades; useful for measuring whether signal agreement
+    is a better predictor than raw confidence.
+    """
+
+    RULE = "consensus_required"
+
+    def select(self, signals: list[Signal]) -> Signal:
+        actionable = [s for s in signals if s.action != "hold"]
+        if not actionable:
+            return max(signals, key=lambda s: s.confidence)
+
+        actions = {s.action for s in actionable}
+        if len(actions) > 1:
+            # Conflict — hold
+            hold_signals = [s for s in signals if s.action == "hold"]
+            conflicting = ", ".join(f"{s.name}:{s.action}" for s in actionable)
+            if hold_signals:
+                best = max(hold_signals, key=lambda s: s.confidence)
+                return Signal(
+                    name=best.name,
+                    action="hold",
+                    confidence=best.confidence,
+                    reason=f"No consensus — conflicting signals ({conflicting})",
+                )
+            return Signal(
+                name=actionable[0].name,
+                action="hold",
+                confidence=0.1,
+                reason=f"No consensus — conflicting signals ({conflicting})",
+            )
+
+        return max(actionable, key=lambda s: s.confidence)
+
+
+AVAILABLE_COMBINERS: dict[str, type[CombinerBase]] = {
+    "highest_confidence": Combiner,
+    "weighted_voting": WeightedVotingCombiner,
+    "consensus": ConsensusCombiner,
+}
 
 
 # ------------------------------------
@@ -550,6 +710,7 @@ class StrategyEvaluator:
         self._strategies: list[Strategy] = [
             MomentumStrategy(config),
             MeanReversionStrategy(config),
+            BreakoutStrategy(config),
         ]
         self._combiner = Combiner()
 
