@@ -63,6 +63,21 @@ class SimulatedPosition:
 
 
 @dataclass
+class EquityPoint:
+    """
+    One data point on the equity curve — recorded at every bar after warmup.
+    Equity is post-trade (reflects any fill that happened on this bar).
+    `trade` is "buy" | "sell" | None — lets consumers overlay trade markers.
+    `decided_by` is "risk_block" | "strategy" | "hold" — attribution summary for this bar.
+    """
+    date: str
+    equity: float
+    price: float
+    trade: Optional[str] = None       # "buy" | "sell" | None
+    decided_by: Optional[str] = None  # "risk_block" | "strategy" | "hold"
+
+
+@dataclass
 class TradeEvent:
     date: str
     action: str           # "buy" | "sell"
@@ -91,7 +106,10 @@ class BacktestResult:
     win_count: int              # sells with positive realized P&L
     loss_count: int
     risk_blocks: int            # bars where risk gating blocked strategy
+    max_drawdown_pct: float = 0.0
+    strategy_dominance: dict = field(default_factory=dict)  # {strategy_name: count}
     trades: list[TradeEvent] = field(default_factory=list)
+    equity_curve: list[EquityPoint] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         return {
@@ -116,7 +134,21 @@ class BacktestResult:
                 "win_rate_pct": round(
                     self.win_count / self.sell_count * 100, 2
                 ) if self.sell_count > 0 else None,
+                "max_drawdown_pct": self.max_drawdown_pct,
             },
+            "attribution_summary": {
+                "strategy_dominance": self.strategy_dominance,
+            },
+            "equity_curve": [
+                {
+                    "date": ep.date,
+                    "equity": ep.equity,
+                    "price": ep.price,
+                    "trade": ep.trade,
+                    "decided_by": ep.decided_by,
+                }
+                for ep in self.equity_curve
+            ],
             "trades": [
                 {
                     "date": t.date,
@@ -209,6 +241,7 @@ class BacktestEngine:
 
         # --- Result accumulators ---
         trades: list[TradeEvent] = []
+        equity_curve: list[EquityPoint] = []
         risk_blocks = 0
 
         # --- Main loop: one bar at a time after warmup ---
@@ -267,12 +300,22 @@ class BacktestEngine:
                 },
             )
 
+            date_str = bar.timestamp.date().isoformat()
+
             if violations:
                 risk_blocks += 1
-                continue   # risk blocked — do not trade
+                # Record equity point even on risk blocks (equity unchanged this bar)
+                equity_curve.append(EquityPoint(
+                    date=date_str,
+                    equity=round(cash + (position.market_value if position else 0.0), 2),
+                    price=round(price, 4),
+                    trade=None,
+                    decided_by="risk_block",
+                ))
+                continue
 
             # Simulate fill at bar close
-            date_str = bar.timestamp.date().isoformat()
+            trade_action: Optional[str] = None
 
             if selected.action == "buy" and not position:
                 cost = price * bt_config.shares_per_trade
@@ -295,6 +338,7 @@ class BacktestEngine:
                         realized_pnl=None,
                         attribution=attribution.to_dict(),
                     ))
+                    trade_action = "buy"
 
             elif selected.action == "sell" and position:
                 proceeds = price * position.qty
@@ -312,6 +356,16 @@ class BacktestEngine:
                     attribution=attribution.to_dict(),
                 ))
                 position = None
+                trade_action = "sell"
+
+            # Record post-trade equity point for this bar
+            equity_curve.append(EquityPoint(
+                date=date_str,
+                equity=round(cash + (position.market_value if position else 0.0), 2),
+                price=round(price, 4),
+                trade=trade_action,
+                decided_by="strategy" if trade_action else "hold",
+            ))
 
         # Mark-to-market at end: close any open position at last bar price
         if position and bars:
@@ -323,6 +377,25 @@ class BacktestEngine:
 
         sell_trades = [t for t in trades if t.action == "sell"]
         win_count = sum(1 for t in sell_trades if (t.realized_pnl or 0) > 0)
+
+        # --- Derived stats from equity curve ---
+        peak = bt_config.initial_cash
+        max_drawdown = 0.0
+        for ep in equity_curve:
+            if ep.equity > peak:
+                peak = ep.equity
+            dd = (peak - ep.equity) / peak if peak > 0 else 0.0
+            if dd > max_drawdown:
+                max_drawdown = dd
+
+        # Strategy dominance: count how often each strategy name won the combiner
+        from collections import Counter
+        dominance: Counter = Counter()
+        for t in trades:
+            if t.attribution:
+                sel = t.attribution.get("strategy", {}).get("selected")
+                if sel and sel.get("name"):
+                    dominance[sel["name"]] += 1
 
         return BacktestResult(
             symbol=symbol,
@@ -339,5 +412,8 @@ class BacktestEngine:
             win_count=win_count,
             loss_count=len(sell_trades) - win_count,
             risk_blocks=risk_blocks,
+            max_drawdown_pct=round(max_drawdown, 4),
+            strategy_dominance=dict(dominance),
             trades=trades,
+            equity_curve=equity_curve,
         )
