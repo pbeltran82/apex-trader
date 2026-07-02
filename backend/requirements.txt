@@ -1,7 +1,0 @@
-fastapi
-uvicorn
-gunicorn
-alpaca-py
-requests
-python-dotenv
-pandas
