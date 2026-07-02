@@ -4,3 +4,4 @@ gunicorn
 alpaca-py
 requests
 python-dotenv
+pandas
