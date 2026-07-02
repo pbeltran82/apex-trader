@@ -30,6 +30,7 @@ from alpaca.data.enums import DataFeed
 from engine import (
     EngineConfig,
     MarketSnapshot,
+    TradeAttribution,
     RiskEvaluator,
     StrategyEvaluator,
     Combiner,
@@ -70,7 +71,8 @@ class TradeEvent:
     reason: str           # which strategy + signal fired
     cash_before: float
     cash_after: float
-    realized_pnl: Optional[float]   # None for buys; P&L for sells
+    realized_pnl: Optional[float]          # None for buys; P&L for sells
+    attribution: Optional[dict] = None     # TradeAttribution.to_dict() — who made the call
 
 
 @dataclass
@@ -123,6 +125,7 @@ class BacktestResult:
                     "qty": t.qty,
                     "reason": t.reason,
                     "realized_pnl": round(t.realized_pnl, 4) if t.realized_pnl is not None else None,
+                    "attribution": t.attribution,
                 }
                 for t in self.trades
             ],
@@ -246,13 +249,27 @@ class BacktestEngine:
 
             # Risk layer (unchanged from live engine)
             violations = self.risk.check(snap)
+
+            # Strategy layer always runs — needed for attribution even on risk block
+            all_signals, selected = self.strategy.run_all(snap)
+
+            # Build attribution for this bar (attached to trade events below)
+            attribution = TradeAttribution(
+                decided_by="risk_block" if violations else "strategy",
+                risk={
+                    "blocked": bool(violations),
+                    "violations": [{"reason": v.reason} for v in violations],
+                },
+                strategy={
+                    "all": [s.to_dict() for s in all_signals],
+                    "selected": selected.to_dict(),
+                    "combiner_rule": self.combiner.RULE,
+                },
+            )
+
             if violations:
                 risk_blocks += 1
-                # Still run strategy for observability, but don't act on it
-                continue
-
-            # Strategy layer (unchanged from live engine)
-            all_signals, selected = self.strategy.run_all(snap)
+                continue   # risk blocked — do not trade
 
             # Simulate fill at bar close
             date_str = bar.timestamp.date().isoformat()
@@ -276,6 +293,7 @@ class BacktestEngine:
                         cash_before=cash + cost,
                         cash_after=cash,
                         realized_pnl=None,
+                        attribution=attribution.to_dict(),
                     ))
 
             elif selected.action == "sell" and position:
@@ -291,6 +309,7 @@ class BacktestEngine:
                     cash_before=cash - proceeds,
                     cash_after=cash,
                     realized_pnl=pnl,
+                    attribution=attribution.to_dict(),
                 ))
                 position = None
 

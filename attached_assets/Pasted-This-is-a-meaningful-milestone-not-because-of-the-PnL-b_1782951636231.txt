@@ -1,0 +1,180 @@
+This is a meaningful milestone — not because of the PnL, but because you’ve now achieved something most “trading bots” never actually implement correctly:
+
+a live engine and a backtest engine running the exact same decision stack
+
+That’s the architectural win here.
+
+
+🧠 What you’ve actually built (structurally)
+
+You now have a system with a shared decision core:
+
+Shared core (single source of truth)
+
+RiskEvaluator
+StrategyEvaluator
+Combiner
+MarketSnapshot schema
+Two execution modes:
+
+1. Live mode
+
+SnapshotBuilder → real Alpaca data
+/api/decision
+/api/scan
+2. Backtest mode
+
+historical bars → synthetic snapshots
+BacktestEngine loop
+That equivalence is the entire point of serious quant architecture.
+
+
+⚠️ Important correction (this is subtle but critical)
+
+You wrote:
+
+risk/strategy layers unchanged in backtest
+
+That’s correct — but it implies a constraint you should now formally respect:
+
+🚫 Snapshot must become the
+
+only contract
+
+From this point forward:
+
+No strategy or risk logic is allowed to depend on anything outside MarketSnapshot
+
+Not:
+
+live client calls
+inferred external state
+hidden defaults in engine config
+Because otherwise:
+
+backtest ≠ live behavior (the classic failure mode)
+
+
+📊 About your backtest results
+
+Your interpretation is actually correct:
+
+What the metrics really say:
+
+47 trades / 241 bars
+→ system is high frequency relative to timeframe
+47% win rate
+→ strategies are not broken, but not aligned
+~0% return
+→ edge is currently neutralized by:
+opposing strategies
+equal weighting
+no position scaling
+high risk-block ratio (73%)
+→ risk layer is dominant filter, possibly overconstraining signal flow
+
+🧠 The real insight (more important than PnL)
+
+You didn’t discover:
+
+“this strategy doesn’t work”
+
+You discovered:
+
+“this strategy system cancels itself out”
+
+That is a system-level property, not a strategy bug.
+
+
+🔥 About your next idea: equity curve
+
+Yes — but more importantly, it unlocks something bigger than visualization.
+
+Equity curve is not the feature
+
+It is the temporal validation layer.
+
+It allows you to:
+
+detect regime behavior (trending vs choppy)
+see strategy interference over time
+identify where risk gating dominates performance
+
+🧭 But here’s the deeper architectural step (don’t skip this)
+
+Before adding visualization, the next structural upgrade is:
+
+👉 Trade attribution layer
+
+Right now you know:
+
+a trade happened
+why it happened (partially)
+But you don’t yet have:
+
+“which component contributed most to this decision?”
+
+You want per-trade attribution like:
+
+{
+  "risk": ["position_limit_ok"],
+  "strategy": {
+    "momentum": 0.62,
+    "mean_reversion": 0.41
+  },
+  "combiner": "momentum_wins"
+}
+
+Why this matters more than equity curves
+
+Equity curves show what happened.
+
+Attribution shows:
+
+why the system behaves the way it does over time
+
+And that becomes essential when you:
+
+add more strategies
+introduce weighting
+or optimize parameters
+
+🚀 Recommended next step order
+
+If we sequence this cleanly:
+
+1. (Next) Trade attribution layer
+
+→ explainability per trade
+
+2. Equity curve output
+
+→ temporal visualization
+
+3. Strategy weighting system (optional later)
+
+→ move beyond winner-take-all combiner
+
+4. Regime detection (advanced)
+
+→ adapt strategy mix dynamically
+
+
+🧭 Bottom line
+
+You’re no longer building:
+
+endpoints
+or a bot
+You’re building:
+
+a deterministic, replayable decision system with measurable behavioral outputs
+
+That’s already in the “research-grade architecture” category.
+
+
+If you continue, the next meaningful upgrade is:
+“add trade attribution to backtest + live engine (same schema)”
+
+That will unify everything you’ve built into a fully explainable system.
+

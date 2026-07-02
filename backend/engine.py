@@ -146,6 +146,27 @@ class Decision:
 
 
 @dataclass
+class TradeAttribution:
+    """
+    Lightweight explainability record for a single decision.
+    Answers: "which component made this call, and what did every component see?"
+
+    Designed to travel with TradeEvent in backtest and live attribution mode.
+    Lighter than PipelineTrace — no snapshot dump, pure decision provenance.
+    """
+    decided_by: str    # "risk_block" | "strategy" | "snapshot_error"
+    risk: dict         # {blocked, violations: [{reason}]}
+    strategy: dict     # {all: [{name, action, confidence}], selected, combiner_rule}
+
+    def to_dict(self) -> dict:
+        return {
+            "decided_by": self.decided_by,
+            "risk": self.risk,
+            "strategy": self.strategy,
+        }
+
+
+@dataclass
 class PipelineTrace:
     """
     Full pipeline trace returned when debug=true.
@@ -587,7 +608,7 @@ class DecisionEngine:
                 action="hold",
                 reason=f"Risk block: {violations[0].reason}",
                 confidence="high",
-                confidence_score=1.0,   # certainty of the block, not of a trade signal
+                confidence_score=1.0,
                 context=context,
             )
 
@@ -600,6 +621,79 @@ class DecisionEngine:
             confidence_score=selected.confidence,
             context=context,
         )
+
+    def evaluate_attributed(self, symbol: str) -> tuple[Decision, TradeAttribution]:
+        """
+        Same execution path as evaluate().
+        Additionally returns a TradeAttribution capturing which component made
+        the final call and what every strategy saw — same schema used in backtest.
+        """
+        sym = symbol.upper()
+
+        try:
+            snap = self.snapshot_builder.build(sym)
+        except Exception as e:
+            error_msg = str(e)
+            decision = Decision(sym, "hold", f"Snapshot failed: {error_msg}", "low", 0.0)
+            attribution = TradeAttribution(
+                decided_by="snapshot_error",
+                risk={"blocked": True, "violations": [], "error": error_msg},
+                strategy={
+                    "skipped": True,
+                    "reason": "snapshot failed",
+                    "all": [],
+                    "selected": None,
+                    "combiner_rule": self.strategy._combiner.RULE,
+                },
+            )
+            return decision, attribution
+
+        context = snap.to_context()
+        violations = self.risk.check(snap)
+
+        # Always run strategies regardless of risk — attribution shows what they saw
+        all_signals, selected = self.strategy.run_all(snap)
+        strategy_dict = {
+            "all": [s.to_dict() for s in all_signals],
+            "selected": selected.to_dict(),
+            "combiner_rule": self.strategy._combiner.RULE,
+        }
+
+        if violations:
+            risk_dict = {
+                "blocked": True,
+                "violations": [{"reason": v.reason} for v in violations],
+            }
+            decision = Decision(
+                symbol=sym,
+                action="hold",
+                reason=f"Risk block: {violations[0].reason}",
+                confidence="high",
+                confidence_score=1.0,
+                context=context,
+            )
+            attribution = TradeAttribution(
+                decided_by="risk_block",
+                risk=risk_dict,
+                strategy=strategy_dict,
+            )
+        else:
+            risk_dict = {"blocked": False, "violations": []}
+            decision = Decision(
+                symbol=sym,
+                action=selected.action,
+                reason=selected.reason,
+                confidence=_confidence_label(selected.confidence),
+                confidence_score=selected.confidence,
+                context=context,
+            )
+            attribution = TradeAttribution(
+                decided_by="strategy",
+                risk=risk_dict,
+                strategy=strategy_dict,
+            )
+
+        return decision, attribution
 
     def evaluate_debug(self, symbol: str) -> PipelineTrace:
         """

@@ -1,2 +1,3 @@
 - [Alpaca BarSet access](alpaca-barset-access.md) — BarSet dict has nested 'data' key; correct pattern is `dict(bars_data).get('data', {}).get(symbol, [])`
 - [Alpaca data feed tiers](alpaca-data-feed-tiers.md) — IEX serves live quotes only; historical daily bars require default (SIP); free plan blocks recent SIP but historical works fine
+- [Trade attribution schema](trade-attribution-schema.md) — TradeAttribution is the shared explainability contract; backtest strategies must always run (even on risk block) so attribution is complete; TradeEvent serialization is inline in BacktestResult.to_dict(), not via a method

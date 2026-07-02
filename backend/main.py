@@ -10,7 +10,7 @@ from alpaca.trading.enums import OrderSide, TimeInForce, QueryOrderStatus
 from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.requests import StockLatestTradeRequest, StockBarsRequest
 from alpaca.data.timeframe import TimeFrame
-from engine import DecisionEngine, EngineConfig, PipelineTrace
+from engine import DecisionEngine, EngineConfig, PipelineTrace, TradeAttribution
 from backtest import BacktestEngine, BacktestConfig
 
 app = FastAPI(title="Apex Trader API")
@@ -228,10 +228,13 @@ def get_exposure():
 # ------------------------------------
 
 @app.get("/api/decision/{symbol}")
-def get_decision(symbol: str, debug: bool = False):
+def get_decision(symbol: str, debug: bool = False, attribution: bool = False):
     try:
         if debug:
             return engine.evaluate_debug(symbol).to_dict()
+        if attribution:
+            decision, attr = engine.evaluate_attributed(symbol)
+            return {**decision.to_dict(), "attribution": attr.to_dict()}
         return engine.evaluate(symbol).to_dict()
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
