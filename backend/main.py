@@ -1,7 +1,9 @@
 import os
+from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError as FuturesTimeout
+from datetime import datetime, timezone
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from alpaca.trading.client import TradingClient
 from alpaca.trading.requests import MarketOrderRequest, GetOrdersRequest
 from alpaca.trading.enums import OrderSide, TimeInForce, QueryOrderStatus
@@ -232,6 +234,98 @@ def get_decision(symbol: str, debug: bool = False):
         return engine.evaluate(symbol).to_dict()
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ------------------------------------
+# SCAN (parallel ranking layer)
+# ------------------------------------
+
+MAX_SCAN_SYMBOLS = 50
+SCAN_TIMEOUT_SECS = 12  # per-symbol wall time before it's marked as error
+
+
+class ScanRequest(BaseModel):
+    symbols: list[str] = Field(..., min_length=1, max_length=MAX_SCAN_SYMBOLS)
+    debug: bool = False
+
+
+def _rank(results: list[dict]) -> list[dict]:
+    """
+    Ranking is a pure post-process step, separate from evaluation.
+    Rule: actionable signals (buy/sell) first, then sort all by confidence_score desc.
+    Rank 1 = highest priority opportunity. risk_blocked rows sort to the bottom.
+    """
+    def sort_key(r):
+        is_actionable = r["action"] in {"buy", "sell"} and not r["risk_blocked"]
+        return (0 if is_actionable else 1, -r["confidence_score"])
+
+    sorted_results = sorted(results, key=sort_key)
+    for i, r in enumerate(sorted_results):
+        r["rank"] = i + 1
+    return sorted_results
+
+
+@app.post("/api/scan")
+def scan(request: ScanRequest):
+    symbols = [s.upper().strip() for s in request.symbols]
+    scan_time = datetime.now(timezone.utc).isoformat()
+
+    raw_results: dict[str, dict] = {}
+
+    def evaluate_one(sym: str) -> tuple[str, dict]:
+        try:
+            if request.debug:
+                trace = engine.evaluate_debug(sym)
+                d = trace.decision
+                return sym, {
+                    "symbol": sym,
+                    "action": d["action"],
+                    "confidence": d["confidence"],
+                    "confidence_score": d["confidence_score"],
+                    "risk_blocked": trace.risk["blocked"],
+                    "reason": d["reason"],
+                    "pipeline": trace.to_dict(),
+                    "error": None,
+                }
+            else:
+                decision = engine.evaluate(sym)
+                return sym, {
+                    "symbol": sym,
+                    "action": decision.action,
+                    "confidence": decision.confidence,
+                    "confidence_score": decision.confidence_score,
+                    "risk_blocked": decision.action == "hold" and decision.confidence == "high",
+                    "reason": decision.reason,
+                    "error": None,
+                }
+        except Exception as e:
+            return sym, {
+                "symbol": sym,
+                "action": "error",
+                "confidence": "low",
+                "confidence_score": 0.0,
+                "risk_blocked": False,
+                "reason": str(e),
+                "error": str(e),
+            }
+
+    with ThreadPoolExecutor(max_workers=min(len(symbols), 10)) as pool:
+        futures = {pool.submit(evaluate_one, sym): sym for sym in symbols}
+        for future in as_completed(futures, timeout=SCAN_TIMEOUT_SECS * len(symbols)):
+            sym, result = future.result()
+            raw_results[sym] = result
+
+    results = _rank(list(raw_results.values()))
+
+    actionable = [r for r in results if r["action"] in {"buy", "sell"} and not r["risk_blocked"]]
+
+    return {
+        "scan_time": scan_time,
+        "total": len(results),
+        "actionable_count": len(actionable),
+        "results": results,
+    }
+
 
 # ------------------------------------
 # MARKET DATA (read-only layer)

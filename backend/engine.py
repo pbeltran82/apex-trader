@@ -130,7 +130,8 @@ class Decision:
     symbol: str
     action: str
     reason: str
-    confidence: str      # "high" | "medium" | "low" — derived from float for API consumers
+    confidence: str           # "high" | "medium" | "low" — label for API consumers
+    confidence_score: float   # 0.0–1.0 — raw float for ranking (scan, backtest, etc.)
     context: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict:
@@ -139,6 +140,7 @@ class Decision:
             "action": self.action,
             "reason": self.reason,
             "confidence": self.confidence,
+            "confidence_score": round(self.confidence_score, 3),
             "context": self.context,
         }
 
@@ -573,6 +575,7 @@ class DecisionEngine:
                 action="hold",
                 reason=f"Snapshot failed: {str(e)}",
                 confidence="low",
+                confidence_score=0.0,
             )
 
         context = snap.to_context()
@@ -584,6 +587,7 @@ class DecisionEngine:
                 action="hold",
                 reason=f"Risk block: {violations[0].reason}",
                 confidence="high",
+                confidence_score=1.0,   # certainty of the block, not of a trade signal
                 context=context,
             )
 
@@ -593,6 +597,7 @@ class DecisionEngine:
             action=selected.action,
             reason=selected.reason,
             confidence=_confidence_label(selected.confidence),
+            confidence_score=selected.confidence,
             context=context,
         )
 
@@ -614,7 +619,7 @@ class DecisionEngine:
                 snapshot={"error": error_msg},
                 risk={"blocked": True, "violations": [], "error": "snapshot failed"},
                 strategies={"skipped": True, "reason": "snapshot failed", "all": [], "selected": None},
-                decision=Decision(sym, "hold", f"Snapshot failed: {error_msg}", "low").to_dict(),
+                decision=Decision(sym, "hold", f"Snapshot failed: {error_msg}", "low", 0.0).to_dict(),
             )
 
         # Stage 2: risk
@@ -641,6 +646,7 @@ class DecisionEngine:
                 action="hold",
                 reason=f"Risk block: {violations[0].reason}",
                 confidence="high",
+                confidence_score=1.0,
                 context=snapshot_dict,
             )
         else:
@@ -649,6 +655,7 @@ class DecisionEngine:
                 action=selected.action,
                 reason=selected.reason,
                 confidence=_confidence_label(selected.confidence),
+                confidence_score=selected.confidence,
                 context=snapshot_dict,
             )
 
