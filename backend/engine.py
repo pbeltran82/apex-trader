@@ -235,7 +235,7 @@ class SnapshotBuilder:
             feed=DataFeed.IEX,
         )
         bars_data = self.data.get_stock_bars(bars_req)
-        bars = list(bars_data[symbol]) if symbol in bars_data else []
+        bars = list(dict(bars_data).get('data', {}).get(symbol, []))
         bars = bars[-lookback_days:]
 
         close_prices = [float(b.close) for b in bars]

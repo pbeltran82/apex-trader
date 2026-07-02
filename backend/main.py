@@ -11,6 +11,7 @@ from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.requests import StockLatestTradeRequest, StockBarsRequest
 from alpaca.data.timeframe import TimeFrame
 from engine import DecisionEngine, EngineConfig, PipelineTrace
+from backtest import BacktestEngine, BacktestConfig
 
 app = FastAPI(title="Apex Trader API")
 
@@ -325,6 +326,47 @@ def scan(request: ScanRequest):
         "actionable_count": len(actionable),
         "results": results,
     }
+
+
+# ------------------------------------
+# BACKTEST
+# ------------------------------------
+
+bt_engine = BacktestEngine(data_client=data_client, engine_config=EngineConfig())
+
+
+class BacktestRequest(BaseModel):
+    symbol: str
+    start: str = Field(..., description="ISO date, e.g. 2024-01-01")
+    end: str = Field(..., description="ISO date, e.g. 2024-12-31")
+    initial_cash: float = Field(default=100_000.0, gt=0)
+    shares_per_trade: int = Field(default=1, ge=1, le=100)
+
+
+@app.post("/api/backtest")
+def run_backtest(request: BacktestRequest):
+    try:
+        start_dt = datetime.fromisoformat(request.start).replace(tzinfo=timezone.utc)
+        end_dt = datetime.fromisoformat(request.end).replace(tzinfo=timezone.utc)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=f"Invalid date format: {e}")
+
+    if end_dt <= start_dt:
+        raise HTTPException(status_code=422, detail="end must be after start")
+    if (end_dt - start_dt).days < 30:
+        raise HTTPException(status_code=422, detail="Date range must be at least 30 days")
+
+    try:
+        result = bt_engine.run(BacktestConfig(
+            symbol=request.symbol,
+            start=start_dt,
+            end=end_dt,
+            initial_cash=request.initial_cash,
+            shares_per_trade=request.shares_per_trade,
+        ))
+        return result.to_dict()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 # ------------------------------------
