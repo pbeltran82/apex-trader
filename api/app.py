@@ -1,86 +1,71 @@
-import core.env
-
 from fastapi import FastAPI
-from pydantic import BaseModel
+from fastapi.middleware.cors import CORSMiddleware
 
-from services.trading_service import TradingService
-from services.history_service import HistoryService
+app = FastAPI()
 
-app = FastAPI(
-    title="Apex Trader API",
-    version="1.0.0"
+# =========================
+# CORS (GLOBAL FIX)
+# =========================
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:5173",
+        "https://*.github.dev",
+        "https://*.app.github.dev"
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
-service = None
-history = None
+# =========================
+# MOCK PAPER TRADING STATE
+# =========================
+account = {
+    "balance": 10000,
+    "equity": 10000,
+    "buying_power": 10000
+}
+
+positions = []
+trades = []
+equity_curve = [{"equity": 10000}]
+prices = {
+    "AAPL": 190.12,
+    "TSLA": 245.55,
+    "NVDA": 455.10
+}
+
+# =========================
+# ROUTES
+# =========================
+
+@app.get("/api/account")
+def get_account():
+    return account
 
 
-class TradeRequest(BaseModel):
-    symbol: str
-    qty: float
-    side: str
+@app.get("/api/positions")
+def get_positions():
+    return positions
 
 
-@app.on_event("startup")
-def startup():
-    global service, history
-    service = TradingService()
-    history = HistoryService()
+@app.get("/api/trades")
+def get_trades():
+    return trades
 
 
+@app.get("/api/equity")
+def get_equity():
+    return equity_curve
+
+
+@app.get("/api/prices")
+def get_prices():
+    return prices
+
+
+# health check
 @app.get("/")
 def root():
-    return {
-        "status": "ok",
-        "service": "Apex Trader API",
-        "version": "1.0.0",
-        "docs": "/docs"
-    }
-
-
-@app.get("/health")
-def health():
-    return {
-        "status": "healthy"
-    }
-
-
-@app.get("/account")
-def account():
-    return service.broker.get_account()
-
-
-@app.get("/positions")
-def positions():
-    return service.broker.get_positions()
-
-
-@app.get("/market/{symbol}")
-def market(symbol: str):
-    trade = service.broker.get_latest_trade(symbol.upper())
-
-    return {
-        "symbol": symbol.upper(),
-        "price": float(trade.price),
-        "size": trade.size,
-        "timestamp": trade.timestamp,
-    }
-
-
-@app.get("/exposure")
-def exposure():
-    return service.get_exposure()
-
-
-@app.get("/trades")
-def trades():
-    return history.get_trades()
-
-
-@app.post("/trade")
-def trade(request: TradeRequest):
-    return service.trade(
-        request.symbol,
-        request.qty,
-        request.side,
-    )
+    return {"status": "ok"}

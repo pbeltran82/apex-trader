@@ -1,29 +1,16 @@
 import axios from "axios";
 
-// Using Vite proxy (NO hardcoded backend URL)
-const API = axios.create({
-  baseURL: "",
+const API_BASE = "https://ubiquitous-capybara-v6gj596vr473xpwg-8000.app.github.dev";
+
+const api = axios.create({
+  baseURL: API_BASE,
 });
 
-// -------- Core Trading Endpoints --------
+export const getAccount = () => api.get("/account");
+export const getPositions = () => api.get("/positions");
+export const getTrades = () => api.get("/trades");
 
-export const getAccount = () => API.get("/account");
+export const submitTrade = (data) =>
+  api.post("/trade", data);
 
-export const getPositions = () => API.get("/positions");
-
-export const getTrades = () => API.get("/trades");
-
-export const getExposure = () => API.get("/exposure");
-
-// -------- Trading Action --------
-
-export const placeTrade = (data) => API.post("/trade", data);
-
-// -------- Market Data (optional future use) --------
-
-export const getMarketData = (symbol) =>
-  API.get(`/market/${symbol}`);
-
-// -------- Default export --------
-
-export default API;
+export default api;
