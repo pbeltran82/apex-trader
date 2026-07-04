@@ -1,5 +1,7 @@
 from datetime import datetime
 
+from backend.activity_log import log_event
+
 execution_queue = []
 
 
@@ -27,6 +29,11 @@ def queue_trade_from_advice(symbol, advice):
             existing["attempts"] = existing.get("attempts", 1) + 1
             existing["last_updated"] = datetime.utcnow().isoformat()
 
+            log_event(
+                f"{symbol} rejected again. Attempts: {existing['attempts']}",
+                "REJECTED",
+            )
+
             return {
                 "ok": False,
                 "message": "Existing trade updated as rejected.",
@@ -45,6 +52,8 @@ def queue_trade_from_advice(symbol, advice):
         }
 
         execution_queue.append(trade)
+
+        log_event(f"{symbol} rejected by advisor: {trade['reason']}", "REJECTED")
 
         return {
             "ok": False,
@@ -69,6 +78,8 @@ def queue_trade_from_advice(symbol, advice):
                 "last_updated": datetime.utcnow().isoformat(),
             }
         )
+
+        log_event(f"{symbol} trade updated and queued.", "QUEUE")
 
         return {
             "ok": True,
@@ -96,6 +107,11 @@ def queue_trade_from_advice(symbol, advice):
 
     execution_queue.append(trade)
 
+    log_event(
+        f"{symbol} queued: {trade['shares']} share(s) at ${trade['entry']}",
+        "QUEUE",
+    )
+
     return {
         "ok": True,
         "message": "Trade queued.",
@@ -116,6 +132,9 @@ def execute_trade(symbol):
             trade["status"] = "ACTIVE"
             trade["executed"] = datetime.utcnow().isoformat()
             trade["message"] = "Manually marked active."
+
+            log_event(f"{symbol} manually marked active.", "ACTIVE")
+
             return trade
 
     return {"error": "Waiting trade not found."}
@@ -129,6 +148,9 @@ def complete_trade(symbol):
             trade["status"] = "COMPLETED"
             trade["completed"] = datetime.utcnow().isoformat()
             trade["message"] = "Trade completed."
+
+            log_event(f"{symbol} trade completed.", "COMPLETED")
+
             return trade
 
     return {"error": "Active or filled trade not found."}
@@ -136,4 +158,5 @@ def complete_trade(symbol):
 
 def clear_queue():
     execution_queue.clear()
+    log_event("Execution queue cleared.", "SYSTEM")
     return {"ok": True, "queue_size": 0}

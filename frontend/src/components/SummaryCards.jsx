@@ -1,20 +1,26 @@
-const money = (n) =>
-  new Intl.NumberFormat("en-US", {
-    style: "currency",
-    currency: "USD",
-  }).format(Number(n ?? 0));
+export default function SummaryCards({ portfolio }) {
+  const cash = portfolio?.cash ?? 0;
+  const equity = portfolio?.equity ?? 0;
+  const openPositions = portfolio?.open_positions ?? 0;
+  const totalPnl = portfolio?.unrealized_pnl ?? 0;
+  const exposurePct = portfolio?.exposure_pct ?? 0;
 
-export default function SummaryCards({ account, openPositions, totalPnl }) {
+  const money = (value) =>
+    Number(value || 0).toLocaleString("en-US", {
+      style: "currency",
+      currency: "USD",
+    });
+
   return (
     <section className="summary-grid">
       <div className="summary-card">
         <span>Cash</span>
-        <strong>{money(account?.balance)}</strong>
+        <strong>{money(cash)}</strong>
       </div>
 
       <div className="summary-card">
         <span>Equity</span>
-        <strong>{money(account?.equity)}</strong>
+        <strong>{money(equity)}</strong>
       </div>
 
       <div className="summary-card">
@@ -23,10 +29,15 @@ export default function SummaryCards({ account, openPositions, totalPnl }) {
       </div>
 
       <div className="summary-card">
-        <span>Unrealized PnL</span>
+        <span>Unrealized P/L</span>
         <strong className={totalPnl >= 0 ? "positive" : "negative"}>
           {money(totalPnl)}
         </strong>
+      </div>
+
+      <div className="summary-card">
+        <span>Exposure</span>
+        <strong>{Number(exposurePct).toFixed(2)}%</strong>
       </div>
     </section>
   );

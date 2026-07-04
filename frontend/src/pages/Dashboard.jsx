@@ -3,10 +3,13 @@ import { useEffect, useState } from "react";
 import Sidebar from "../components/Sidebar";
 import Header from "../components/Header";
 import SummaryCards from "../components/SummaryCards";
+import DailyPlanPanel from "../components/DailyPlanPanel";
 import TradingChart from "../components/TradingChart";
 import Watchlist from "../components/Watchlist";
 import MarketScannerPanel from "../components/MarketScannerPanel";
 import PortfolioHealthPanel from "../components/PortfolioHealthPanel";
+import ExecutionQueuePanel from "../components/ExecutionQueuePanel";
+import ActivityFeedPanel from "../components/ActivityFeedPanel";
 import PortfolioCoachPanel from "../components/PortfolioCoachPanel";
 import TradeAdvicePanel from "../components/TradeAdvicePanel";
 import AIAssistantPanel from "../components/AIAssistantPanel";
@@ -14,32 +17,26 @@ import OrderTicket from "../components/OrderTicket";
 import BacktesterPanel from "../components/BacktesterPanel";
 import PositionsTable from "../components/PositionsTable";
 import TradeTimeline from "../components/TradeTimeline";
-import DailyPlanPanel from "../components/DailyPlanPanel";
-import ExecutionQueuePanel from "../components/ExecutionQueuePanel";
 
 import "./dashboard.css";
 
 const API = "/api";
 
 export default function Dashboard() {
-  const [account, setAccount] = useState(null);
-  const [positions, setPositions] = useState([]);
+  const [portfolioLive, setPortfolioLive] = useState(null);
   const [trades, setTrades] = useState([]);
   const [prices, setPrices] = useState({});
   const [selectedSymbol, setSelectedSymbol] = useState("AAPL");
 
   async function loadDashboard() {
     try {
-      const [accountData, positionsData, tradesData, pricesData] =
-        await Promise.all([
-          fetch(`${API}/account`).then((r) => r.json()),
-          fetch(`${API}/positions`).then((r) => r.json()),
-          fetch(`${API}/trades`).then((r) => r.json()),
-          fetch(`${API}/prices`).then((r) => r.json()),
-        ]);
+      const [portfolioData, tradesData, pricesData] = await Promise.all([
+        fetch(`${API}/portfolio-live`).then((r) => r.json()),
+        fetch(`${API}/trades`).then((r) => r.json()),
+        fetch(`${API}/prices`).then((r) => r.json()),
+      ]);
 
-      setAccount(accountData);
-      setPositions(positionsData);
+      setPortfolioLive(portfolioData);
       setTrades(tradesData);
       setPrices(pricesData);
     } catch (err) {
@@ -49,13 +46,18 @@ export default function Dashboard() {
 
   useEffect(() => {
     loadDashboard();
+
     const timer = setInterval(loadDashboard, 2500);
+
     return () => clearInterval(timer);
   }, []);
 
   async function buy(symbol) {
     try {
-      await fetch(`${API}/buy/${symbol}`, { method: "POST" });
+      await fetch(`${API}/buy/${symbol}`, {
+        method: "POST",
+      });
+
       loadDashboard();
     } catch (err) {
       console.error(err);
@@ -66,11 +68,6 @@ export default function Dashboard() {
     setSelectedSymbol(symbol);
   }
 
-  const totalPnl = positions.reduce(
-    (sum, p) => sum + Number(p.pnl || 0),
-    0
-  );
-
   return (
     <div className="terminal-shell">
       <Sidebar />
@@ -78,15 +75,9 @@ export default function Dashboard() {
       <main className="terminal-main">
         <Header selectedSymbol={selectedSymbol} />
 
-        <SummaryCards
-          account={account}
-          openPositions={positions.length}
-          totalPnl={totalPnl}
-        />
+        <SummaryCards portfolio={portfolioLive} />
 
         <DailyPlanPanel onSelect={handleSelectSymbol} />
-
-        <ExecutionQueuePanel />
 
         <section className="terminal-workspace">
           <section className="chart-column">
@@ -97,7 +88,7 @@ export default function Dashboard() {
               onSymbolChange={handleSelectSymbol}
             />
 
-            <PositionsTable positions={positions} />
+            <PositionsTable positions={portfolioLive?.positions || []} />
           </section>
 
           <aside className="right-rail">
@@ -111,6 +102,10 @@ export default function Dashboard() {
             <MarketScannerPanel onSelect={handleSelectSymbol} />
 
             <PortfolioHealthPanel />
+
+            <ExecutionQueuePanel />
+
+            <ActivityFeedPanel />
 
             <PortfolioCoachPanel onSelect={handleSelectSymbol} />
 

@@ -5,6 +5,7 @@ const API = "/api";
 export default function ExecutionQueuePanel() {
   const [queue, setQueue] = useState([]);
   const [running, setRunning] = useState(false);
+  const [autoRun, setAutoRun] = useState(false);
 
   const loadQueue = async () => {
     try {
@@ -49,6 +50,14 @@ export default function ExecutionQueuePanel() {
     return () => clearInterval(id);
   }, []);
 
+  useEffect(() => {
+    if (!autoRun) return;
+
+    const id = setInterval(runManager, 5000);
+
+    return () => clearInterval(id);
+  }, [autoRun]);
+
   return (
     <section className="panel execution-panel">
       <div className="panel-header">
@@ -56,9 +65,18 @@ export default function ExecutionQueuePanel() {
         <span>{queue.length} trades</span>
       </div>
 
-      <button className="execution-run-button" onClick={runManager}>
-        {running ? "Running..." : "Run Manager"}
-      </button>
+      <div className="execution-controls">
+        <button className="execution-run-button" onClick={runManager}>
+          {running ? "Running..." : "Run Manager"}
+        </button>
+
+        <button
+          className={`execution-auto-button ${autoRun ? "active" : ""}`}
+          onClick={() => setAutoRun((value) => !value)}
+        >
+          {autoRun ? "Auto Manager ON" : "Auto Manager OFF"}
+        </button>
+      </div>
 
       {queue.length === 0 ? (
         <p className="empty">No queued trades yet.</p>
