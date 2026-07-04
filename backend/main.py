@@ -11,6 +11,8 @@ from backend.routes.scanner import router as scanner_router
 from backend.routes.portfolio_ai import router as portfolio_ai_router
 from backend.routes.portfolio_coach import router as portfolio_coach_router
 from backend.routes.position_advisor import router as position_advisor_router
+from backend.routes.daily_plan import router as daily_plan_router
+from backend.routes.execution_queue import router as execution_queue_router
 
 app = FastAPI(title="Kyle Trader API")
 
@@ -32,6 +34,8 @@ app.include_router(scanner_router, prefix="/api")
 app.include_router(portfolio_ai_router,prefix="/api")
 app.include_router(portfolio_coach_router,prefix="/api")
 app.include_router(position_advisor_router, prefix="/api")
+app.include_router(daily_plan_router, prefix="/api")
+app.include_router(execution_queue_router, prefix="/api")
 
 @app.get("/")
 def root():

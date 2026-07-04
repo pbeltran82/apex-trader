@@ -14,6 +14,7 @@ import OrderTicket from "../components/OrderTicket";
 import BacktesterPanel from "../components/BacktesterPanel";
 import PositionsTable from "../components/PositionsTable";
 import TradeTimeline from "../components/TradeTimeline";
+import DailyPlanPanel from "../components/DailyPlanPanel";
 
 import "./dashboard.css";
 
@@ -81,6 +82,8 @@ export default function Dashboard() {
           openPositions={positions.length}
           totalPnl={totalPnl}
         />
+
+        <DailyPlanPanel onSelect={handleSelectSymbol} />
 
         <section className="terminal-workspace">
           <section className="chart-column">
