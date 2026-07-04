@@ -997,3 +997,79 @@ tbody tr:hover {
 .coach-idea small {
   color: var(--muted);
 }
+
+.trade-advice-panel {
+  border-color: rgba(34, 197, 94, 0.35);
+}
+
+.trade-verdict {
+  border-radius: 16px;
+  padding: 16px;
+  margin-bottom: 16px;
+  border: 1px solid var(--border);
+  background: var(--panel-deep);
+}
+
+.trade-verdict strong {
+  font-size: 24px;
+}
+
+.trade-verdict p {
+  margin: 6px 0 0;
+  color: var(--muted);
+}
+
+.trade-verdict.approved strong {
+  color: var(--green);
+}
+
+.trade-verdict.rejected strong {
+  color: #ff6b6b;
+}
+
+.trade-advice-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 12px;
+}
+
+.trade-advice-grid div,
+.trade-reject-box,
+.trade-reason,
+.trade-warnings {
+  background: var(--panel-deep);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 12px;
+}
+
+.trade-advice-grid span {
+  display: block;
+  color: var(--muted);
+  font-size: 11px;
+  text-transform: uppercase;
+  margin-bottom: 6px;
+}
+
+.trade-advice-grid strong {
+  font-size: 15px;
+}
+
+.trade-reason,
+.trade-warnings,
+.trade-reject-box {
+  margin-top: 14px;
+}
+
+.trade-reason p,
+.trade-reject-box p {
+  color: var(--muted);
+  line-height: 1.45;
+  margin-bottom: 0;
+}
+
+.trade-warnings ul {
+  margin: 8px 0 0;
+  padding-left: 18px;
+  color: var(--muted);
+}
