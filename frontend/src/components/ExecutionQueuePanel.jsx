@@ -4,6 +4,7 @@ const API = "/api";
 
 export default function ExecutionQueuePanel() {
   const [queue, setQueue] = useState([]);
+  const [running, setRunning] = useState(false);
 
   const loadQueue = async () => {
     try {
@@ -11,6 +12,22 @@ export default function ExecutionQueuePanel() {
       setQueue(Array.isArray(data) ? data : []);
     } catch (err) {
       console.error("EXECUTION QUEUE ERROR:", err);
+    }
+  };
+
+  const runManager = async () => {
+    setRunning(true);
+
+    try {
+      await fetch(`${API}/execution-manager/run`, {
+        method: "POST",
+      });
+
+      await loadQueue();
+    } catch (err) {
+      console.error("EXECUTION MANAGER ERROR:", err);
+    } finally {
+      setRunning(false);
     }
   };
 
@@ -39,6 +56,10 @@ export default function ExecutionQueuePanel() {
         <span>{queue.length} trades</span>
       </div>
 
+      <button className="execution-run-button" onClick={runManager}>
+        {running ? "Running..." : "Run Manager"}
+      </button>
+
       {queue.length === 0 ? (
         <p className="empty">No queued trades yet.</p>
       ) : (
@@ -49,8 +70,18 @@ export default function ExecutionQueuePanel() {
                 <strong>{trade.symbol}</strong>
                 <p>{trade.status}</p>
 
+                {trade.message && (
+                  <small className="execution-reason">{trade.message}</small>
+                )}
+
                 {trade.reason && (
                   <small className="execution-reason">{trade.reason}</small>
+                )}
+
+                {trade.attempts && (
+                  <small className="execution-attempts">
+                    Attempts: {trade.attempts}
+                  </small>
                 )}
               </div>
 
@@ -67,11 +98,11 @@ export default function ExecutionQueuePanel() {
               <div className="execution-actions">
                 {trade.status === "WAITING" && (
                   <button onClick={() => executeTrade(trade.symbol)}>
-                    Execute
+                    Manual
                   </button>
                 )}
 
-                {trade.status === "ACTIVE" && (
+                {["ACTIVE", "FILLED"].includes(trade.status) && (
                   <button onClick={() => completeTrade(trade.symbol)}>
                     Complete
                   </button>

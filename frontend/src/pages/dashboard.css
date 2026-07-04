@@ -1233,3 +1233,27 @@ tbody tr:hover {
 .queue-trade-button:hover {
   background: rgba(34, 197, 94, 0.22);
 }
+
+.execution-run-button {
+  width: 100%;
+  margin-bottom: 14px;
+  background: rgba(34, 197, 94, 0.14);
+  color: var(--green);
+  border: 1px solid rgba(34, 197, 94, 0.35);
+  border-radius: 12px;
+  padding: 12px;
+  font-weight: 900;
+  cursor: pointer;
+}
+
+.execution-run-button:hover {
+  background: rgba(34, 197, 94, 0.22);
+}
+
+.execution-attempts {
+  display: block;
+  color: var(--green);
+  margin-top: 4px;
+  font-size: 11px;
+  font-weight: 800;
+}

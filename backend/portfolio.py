@@ -26,6 +26,7 @@ def get_enriched_positions():
 
     for p in positions:
         price = prices[p["symbol"]]
+
         enriched.append({
             **p,
             "current_price": money(price),
@@ -35,37 +36,54 @@ def get_enriched_positions():
     return enriched
 
 
-def buy_symbol(symbol):
+def buy_symbol(symbol, qty=1):
     symbol = symbol.upper()
+    qty = int(qty)
+
+    if qty <= 0:
+        return {"error": "Quantity must be greater than zero"}
 
     if symbol not in prices:
         return {"error": "Unknown symbol"}
 
     price = prices[symbol]
+    total_cost = money(price * qty)
+
+    if account["balance"] < total_cost:
+        return {"error": "Insufficient cash"}
 
     for p in positions:
         if p["symbol"] == symbol:
-            new_qty = p["qty"] + 1
+            new_qty = p["qty"] + qty
+
             p["avg_price"] = money(
-                ((p["avg_price"] * p["qty"]) + price) / new_qty
+                ((p["avg_price"] * p["qty"]) + (price * qty)) / new_qty
             )
+
             p["qty"] = new_qty
             break
     else:
         positions.append({
             "symbol": symbol,
-            "qty": 1,
+            "qty": qty,
             "avg_price": price,
         })
 
-    account["balance"] = money(account["balance"] - price)
+    account["balance"] = money(account["balance"] - total_cost)
 
     trades.append({
         "side": "BUY",
         "symbol": symbol,
-        "qty": 1,
+        "qty": qty,
         "price": price,
+        "total": total_cost,
         "time": datetime.utcnow().isoformat(),
     })
 
-    return {"ok": True}
+    return {
+        "ok": True,
+        "symbol": symbol,
+        "qty": qty,
+        "price": price,
+        "total": total_cost,
+    }
