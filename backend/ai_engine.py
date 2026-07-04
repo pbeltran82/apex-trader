@@ -10,20 +10,15 @@ def clamp(value, low, high):
 
 
 def get_regime(ind):
-    trend = ind["trend"]
     atr_pct = (ind["atr"] / ind["last_price"]) * 100 if ind["last_price"] else 0
 
-    if atr_pct > 2.2:
-        volatility = "High Volatility"
-    elif atr_pct < 0.7:
-        volatility = "Low Volatility"
-    else:
-        volatility = "Normal Volatility"
+    volatility = (
+        "High Volatility" if atr_pct > 2.2 else
+        "Low Volatility" if atr_pct < 0.7 else
+        "Normal Volatility"
+    )
 
-    if "Bullish" in trend or "Bearish" in trend:
-        structure = "Trending"
-    else:
-        structure = "Ranging"
+    structure = "Trending" if "Bullish" in ind["trend"] or "Bearish" in ind["trend"] else "Ranging"
 
     return f"{structure} / {volatility}"
 
@@ -31,36 +26,51 @@ def get_regime(ind):
 def score_market(ind):
     score = 0
     reasons = []
+    blockers = []
 
     # Trend stack
     if ind["ema9"] > ind["ema20"] > ind["ema50"] > ind["ema200"]:
-        score += 30
+        score += 32
         reasons.append("EMA stack is strongly bullish.")
     elif ind["ema9"] > ind["ema20"] > ind["ema50"]:
-        score += 22
+        score += 20
         reasons.append("Short and medium-term EMAs are bullish.")
     elif ind["ema9"] < ind["ema20"] < ind["ema50"] < ind["ema200"]:
-        score -= 30
+        score -= 32
         reasons.append("EMA stack is strongly bearish.")
     elif ind["ema9"] < ind["ema20"] < ind["ema50"]:
-        score -= 22
+        score -= 20
         reasons.append("Short and medium-term EMAs are bearish.")
     else:
         reasons.append("EMA structure is mixed.")
 
-    # VWAP
+    # Long-term filter
+    if ind["last_price"] < ind["ema200"]:
+        score -= 14
+        blockers.append("Price is below the 200 EMA, so long trades need extra confirmation.")
+    else:
+        score += 8
+        reasons.append("Price is above the 200 EMA.")
+
+    # VWAP institutional filter
     if ind["last_price"] > ind["vwap"]:
-        score += 10
+        score += 14
         reasons.append("Price is trading above VWAP.")
     else:
-        score -= 10
-        reasons.append("Price is trading below VWAP.")
+        score -= 18
+        blockers.append("Price is below VWAP, showing weak intraday/institutional confirmation.")
 
     # RSI
     rsi = ind["rsi"]
-    if rsi >= 70:
-        score -= 10
+    if rsi >= 75:
+        score -= 18
+        blockers.append("RSI is extremely overbought.")
+    elif rsi >= 70:
+        score -= 12
         reasons.append("RSI is overbought.")
+    elif rsi <= 25:
+        score += 6
+        blockers.append("RSI is extremely oversold; avoid chasing without reversal confirmation.")
     elif rsi <= 30:
         score += 10
         reasons.append("RSI is oversold and may attract mean-reversion buyers.")
@@ -75,106 +85,92 @@ def score_market(ind):
 
     # MACD
     if ind["macd"] > ind["signal"] and ind["histogram"] > 0:
-        score += 15
+        score += 14
         reasons.append("MACD is bullish with positive histogram.")
     elif ind["macd"] < ind["signal"] and ind["histogram"] < 0:
-        score -= 15
+        score -= 14
         reasons.append("MACD is bearish with negative histogram.")
     else:
         reasons.append("MACD is mixed.")
 
-    # Bollinger position
+    # Bollinger
     if ind["last_price"] > ind["bollinger_upper"]:
-        score += 8
-        reasons.append("Price is breaking above the upper Bollinger Band.")
+        score -= 6
+        blockers.append("Price is extended above the upper Bollinger Band; breakout risk is elevated.")
     elif ind["last_price"] < ind["bollinger_lower"]:
-        score -= 8
-        reasons.append("Price is below the lower Bollinger Band.")
+        score -= 6
+        blockers.append("Price is below the lower Bollinger Band; downside pressure is elevated.")
     else:
         reasons.append("Price is inside Bollinger Bands.")
 
     # ROC
     if ind["roc"] > 1:
-        score += 8
+        score += 7
         reasons.append("Rate of change is positive.")
     elif ind["roc"] < -1:
-        score -= 8
+        score -= 7
         reasons.append("Rate of change is negative.")
 
-    # OBV rough confirmation
+    # OBV
     if ind["obv"] > 0:
-        score += 5
+        score += 8
         reasons.append("OBV shows net accumulation.")
     else:
-        score -= 5
-        reasons.append("OBV shows net distribution.")
+        score -= 12
+        blockers.append("OBV shows net distribution.")
 
     # Relative volume
     if ind["relative_volume"] > 1.5:
-        score += 8
+        score += 10
         reasons.append("Relative volume is elevated.")
     elif ind["relative_volume"] < 0.7:
-        score -= 4
-        reasons.append("Relative volume is weak.")
+        score -= 8
+        blockers.append("Relative volume is weak.")
     else:
         reasons.append("Relative volume is normal.")
 
-    # Crossovers
+    # Crossover
     if ind["crossover"] == "bullish":
-        score += 15
+        score += 16
         reasons.append("Fresh bullish EMA crossover detected.")
     elif ind["crossover"] == "bearish":
-        score -= 15
-        reasons.append("Fresh bearish EMA crossover detected.")
+        score -= 16
+        blockers.append("Fresh bearish EMA crossover detected.")
 
-    return score, reasons
+    return score, reasons, blockers
 
 
-def build_recommendation(score):
-    if score >= 65:
+def build_recommendation(score, blockers):
+    major_blockers = len(blockers)
+
+    if major_blockers >= 3 and score > 0:
+        return "NEUTRAL"
+
+    if score >= 70:
         return "STRONG BUY"
-    if score >= 30:
+    if score >= 38:
         return "BUY WATCH"
-    if score <= -65:
+    if score <= -70:
         return "STRONG SELL"
-    if score <= -30:
+    if score <= -38:
         return "AVOID / SELL WATCH"
     return "NEUTRAL"
 
 
 def build_risk(ind):
     atr_pct = (ind["atr"] / ind["last_price"]) * 100 if ind["last_price"] else 0
-    volatility_component = atr_pct * 18
+    risk = atr_pct * 20
 
-    rsi_component = 0
-    if ind["rsi"] > 75 or ind["rsi"] < 25:
-        rsi_component = 12
-
-    band_component = 0
     if ind["last_price"] > ind["bollinger_upper"] or ind["last_price"] < ind["bollinger_lower"]:
-        band_component = 10
+        risk += 14
 
-    risk = volatility_component + rsi_component + band_component
+    if ind["rsi"] > 75 or ind["rsi"] < 25:
+        risk += 12
+
+    if ind["relative_volume"] < 0.7:
+        risk += 8
+
     return clamp(risk, 5, 100)
-
-
-def build_position_size(risk_score, confidence):
-    if confidence < 45:
-        return 0
-
-    base = 1.0
-
-    if confidence >= 80:
-        base = 1.25
-    elif confidence >= 65:
-        base = 1.0
-    elif confidence >= 50:
-        base = 0.5
-
-    risk_adjustment = 1 - (risk_score / 140)
-    size_pct = clamp(base * risk_adjustment, 0, 1.25)
-
-    return money(size_pct)
 
 
 def build_probabilities(score):
@@ -183,15 +179,42 @@ def build_probabilities(score):
     return money(buy_probability), money(sell_probability)
 
 
+def build_position_size(risk_score, confidence):
+    if confidence < 50:
+        return 0
+
+    base = 1.0
+    if confidence >= 85:
+        base = 1.25
+    elif confidence >= 70:
+        base = 1.0
+    elif confidence >= 55:
+        base = 0.5
+
+    risk_adjustment = 1 - (risk_score / 125)
+    return money(clamp(base * risk_adjustment, 0, 1.25))
+
+
 def build_summary(symbol, recommendation, regime, ind, confidence):
     return (
         f"{symbol} is rated {recommendation} with {money(confidence)}% confidence. "
-        f"The current market regime is {regime}. "
-        f"Price is {money(ind['last_price'])}, with support near {money(ind['support'])} "
-        f"and resistance near {money(ind['resistance'])}. "
-        f"RSI is {money(ind['rsi'])}, MACD histogram is {money(ind['histogram'])}, "
-        f"and price is {'above' if ind['last_price'] > ind['vwap'] else 'below'} VWAP."
+        f"The market regime is {regime}. Price is {money(ind['last_price'])}, "
+        f"support is near {money(ind['support'])}, resistance is near {money(ind['resistance'])}, "
+        f"RSI is {money(ind['rsi'])}, and price is "
+        f"{'above' if ind['last_price'] > ind['vwap'] else 'below'} VWAP."
     )
+
+
+def build_warnings(ind, blockers, risk_score, confidence):
+    warnings = list(blockers)
+
+    if risk_score > 70:
+        warnings.append("High volatility. Reduce size or wait for confirmation.")
+
+    if confidence < 50:
+        warnings.append("Low confidence. Avoid autonomous execution.")
+
+    return warnings
 
 
 def analyze_symbol(symbol, candles):
@@ -201,14 +224,13 @@ def analyze_symbol(symbol, candles):
         return {"error": "Not enough candle history for AI engine"}
 
     ind = analyze(candles)
-    score, reasons = score_market(ind)
+    score, reasons, blockers = score_market(ind)
 
-    recommendation = build_recommendation(score)
     risk_score = build_risk(ind)
-    confidence = clamp(55 + abs(score) * 0.65 - risk_score * 0.15, 20, 95)
+    confidence = clamp(55 + abs(score) * 0.55 - risk_score * 0.2 - len(blockers) * 4, 20, 95)
+    recommendation = build_recommendation(score, blockers)
     buy_probability, sell_probability = build_probabilities(score)
     regime = get_regime(ind)
-    suggested_size = build_position_size(risk_score, confidence)
 
     return {
         "symbol": symbol,
@@ -218,7 +240,7 @@ def analyze_symbol(symbol, candles):
         "buy_probability": buy_probability,
         "sell_probability": sell_probability,
         "risk_score": money(risk_score),
-        "suggested_position_size_pct": suggested_size,
+        "suggested_position_size_pct": build_position_size(risk_score, confidence),
 
         "market_regime": regime,
         "trend": ind["trend"],
@@ -248,27 +270,8 @@ def analyze_symbol(symbol, candles):
         "bollinger_lower": money(ind["bollinger_lower"]),
 
         "reasoning": reasons,
+        "blockers": blockers,
+        "warnings": build_warnings(ind, blockers, risk_score, confidence),
         "summary": build_summary(symbol, recommendation, regime, ind, confidence),
-        "warnings": build_warnings(ind, risk_score, confidence),
         "disclaimer": "AI-style technical analysis on simulated data. Not financial advice.",
     }
-
-
-def build_warnings(ind, risk_score, confidence):
-    warnings = []
-
-    if risk_score > 70:
-        warnings.append("High volatility. Reduce size or wait for confirmation.")
-
-    if confidence < 45:
-        warnings.append("Low confidence. Avoid autonomous execution.")
-
-    if ind["relative_volume"] < 0.7:
-        warnings.append("Weak relative volume. Signal confirmation is limited.")
-
-    if ind["rsi"] > 75:
-        warnings.append("RSI is extremely overbought.")
-    elif ind["rsi"] < 25:
-        warnings.append("RSI is extremely oversold.")
-
-    return warnings
