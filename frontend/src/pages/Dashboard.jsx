@@ -1,15 +1,19 @@
 import { useEffect, useState } from "react";
+
 import Sidebar from "../components/Sidebar";
 import Header from "../components/Header";
 import SummaryCards from "../components/SummaryCards";
 import TradingChart from "../components/TradingChart";
 import Watchlist from "../components/Watchlist";
 import MarketScannerPanel from "../components/MarketScannerPanel";
+import PortfolioHealthPanel from "../components/PortfolioHealthPanel";
+import PortfolioCoachPanel from "../components/PortfolioCoachPanel";
 import AIAssistantPanel from "../components/AIAssistantPanel";
 import OrderTicket from "../components/OrderTicket";
 import BacktesterPanel from "../components/BacktesterPanel";
 import PositionsTable from "../components/PositionsTable";
 import TradeTimeline from "../components/TradeTimeline";
+
 import "./dashboard.css";
 
 const API = "/api";
@@ -21,43 +25,57 @@ export default function Dashboard() {
   const [prices, setPrices] = useState({});
   const [selectedSymbol, setSelectedSymbol] = useState("AAPL");
 
-  const load = async () => {
+  async function loadDashboard() {
     try {
-      const [accountRes, positionsRes, tradesRes, pricesRes] =
-        await Promise.all([
-          fetch(`${API}/account`).then((r) => r.json()),
-          fetch(`${API}/positions`).then((r) => r.json()),
-          fetch(`${API}/trades`).then((r) => r.json()),
-          fetch(`${API}/prices`).then((r) => r.json()),
-        ]);
+      const [
+        accountData,
+        positionsData,
+        tradesData,
+        pricesData,
+      ] = await Promise.all([
+        fetch(`${API}/account`).then((r) => r.json()),
+        fetch(`${API}/positions`).then((r) => r.json()),
+        fetch(`${API}/trades`).then((r) => r.json()),
+        fetch(`${API}/prices`).then((r) => r.json()),
+      ]);
 
-      setAccount(accountRes);
-      setPositions(positionsRes);
-      setTrades(tradesRes);
-      setPrices(pricesRes);
+      setAccount(accountData);
+      setPositions(positionsData);
+      setTrades(tradesData);
+      setPrices(pricesData);
     } catch (err) {
-      console.error("API ERROR:", err);
+      console.error(err);
     }
-  };
+  }
 
   useEffect(() => {
-    load();
-    const id = setInterval(load, 2500);
-    return () => clearInterval(id);
+    loadDashboard();
+
+    const timer = setInterval(loadDashboard, 2500);
+
+    return () => clearInterval(timer);
   }, []);
 
-  const buy = async (symbol) => {
-    await fetch(`${API}/buy/${symbol}`, { method: "POST" });
-    await load();
-  };
+  async function buy(symbol) {
+    try {
+      await fetch(`${API}/buy/${symbol}`, {
+        method: "POST",
+      });
 
-  const handleSelectSymbol = (symbol) => {
+      loadDashboard();
+    } catch (err) {
+      console.error(err);
+    }
+  }
+
+  function handleSelectSymbol(symbol) {
     setSelectedSymbol(symbol);
-  };
+  }
 
-  const totalPnl = positions.reduce((sum, p) => {
-    return sum + Number(p.pnl ?? 0);
-  }, 0);
+  const totalPnl = positions.reduce(
+    (sum, p) => sum + Number(p.pnl || 0),
+    0
+  );
 
   return (
     <div className="terminal-shell">
@@ -73,7 +91,13 @@ export default function Dashboard() {
         />
 
         <section className="terminal-workspace">
+
+          {/* ===========================
+              LEFT COLUMN
+          ============================ */}
+
           <section className="chart-column">
+
             <TradingChart
               symbol={selectedSymbol}
               symbols={Object.keys(prices)}
@@ -82,9 +106,15 @@ export default function Dashboard() {
             />
 
             <PositionsTable positions={positions} />
+
           </section>
 
+          {/* ===========================
+              RIGHT COLUMN
+          ============================ */}
+
           <aside className="right-rail">
+
             <Watchlist
               prices={prices}
               selectedSymbol={selectedSymbol}
@@ -92,9 +122,19 @@ export default function Dashboard() {
               onBuy={buy}
             />
 
-            <MarketScannerPanel onSelect={handleSelectSymbol} />
+            <MarketScannerPanel
+              onSelect={handleSelectSymbol}
+            />
 
-            <AIAssistantPanel symbol={selectedSymbol} />
+            <PortfolioHealthPanel />
+
+            <PortfolioCoachPanel
+              onSelect={handleSelectSymbol}
+            />
+
+            <AIAssistantPanel
+              symbol={selectedSymbol}
+            />
 
             <OrderTicket
               prices={prices}
@@ -103,10 +143,16 @@ export default function Dashboard() {
               onBuy={buy}
             />
 
-            <BacktesterPanel selectedSymbol={selectedSymbol} />
+            <BacktesterPanel
+              selectedSymbol={selectedSymbol}
+            />
 
-            <TradeTimeline trades={trades} />
+            <TradeTimeline
+              trades={trades}
+            />
+
           </aside>
+
         </section>
       </main>
     </div>

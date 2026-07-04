@@ -8,6 +8,8 @@ from backend.routes.backtester import router as backtester_router
 from backend.routes.ai import router as ai_router
 from backend.routes.trade_planner import router as trade_planner_router
 from backend.routes.scanner import router as scanner_router
+from backend.routes.portfolio_ai import router as portfolio_ai_router
+from backend.routes.portfolio_coach import router as portfolio_coach_router
 
 app = FastAPI(title="Kyle Trader API")
 
@@ -26,8 +28,11 @@ app.include_router(backtester_router, prefix="/api")
 app.include_router(ai_router, prefix="/api")
 app.include_router(trade_planner_router, prefix="/api")
 app.include_router(scanner_router, prefix="/api")
-
+app.include_router(portfolio_ai_router,prefix="/api")
+app.include_router(portfolio_coach_router,prefix="/api")
 
 @app.get("/")
 def root():
     return {"status": "Kyle Trader backend running"}
+
+    
