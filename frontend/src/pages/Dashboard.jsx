@@ -15,6 +15,7 @@ import BacktesterPanel from "../components/BacktesterPanel";
 import PositionsTable from "../components/PositionsTable";
 import TradeTimeline from "../components/TradeTimeline";
 import DailyPlanPanel from "../components/DailyPlanPanel";
+import ExecutionQueuePanel from "../components/ExecutionQueuePanel";
 
 import "./dashboard.css";
 
@@ -84,6 +85,8 @@ export default function Dashboard() {
         />
 
         <DailyPlanPanel onSelect={handleSelectSymbol} />
+
+        <ExecutionQueuePanel />
 
         <section className="terminal-workspace">
           <section className="chart-column">

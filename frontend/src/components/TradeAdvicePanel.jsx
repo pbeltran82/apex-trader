@@ -4,15 +4,30 @@ const API = "/api";
 
 export default function TradeAdvicePanel({ symbol }) {
   const [advice, setAdvice] = useState(null);
+  const [queued, setQueued] = useState(false);
 
   const loadAdvice = async () => {
     try {
       const data = await fetch(`${API}/position-advice/${symbol}`).then((r) =>
         r.json()
       );
+
       setAdvice(data);
+      setQueued(false);
     } catch (err) {
       console.error("TRADE ADVICE ERROR:", err);
+    }
+  };
+
+  const queueTrade = async () => {
+    try {
+      await fetch(`${API}/queue/${symbol}`, {
+        method: "POST",
+      });
+
+      setQueued(true);
+    } catch (err) {
+      console.error("QUEUE TRADE ERROR:", err);
     }
   };
 
@@ -20,6 +35,7 @@ export default function TradeAdvicePanel({ symbol }) {
     if (!symbol) return;
 
     loadAdvice();
+
     const id = setInterval(loadAdvice, 5000);
 
     return () => clearInterval(id);
@@ -34,7 +50,11 @@ export default function TradeAdvicePanel({ symbol }) {
         <span>{advice.symbol}</span>
       </div>
 
-      <div className={`trade-verdict ${advice.approved ? "approved" : "rejected"}`}>
+      <div
+        className={`trade-verdict ${
+          advice.approved ? "approved" : "rejected"
+        }`}
+      >
         <strong>{advice.action}</strong>
         <p>{advice.approved ? "Approved setup" : "Rejected setup"}</p>
       </div>
@@ -83,9 +103,14 @@ export default function TradeAdvicePanel({ symbol }) {
         <p>{advice.reason}</p>
       </div>
 
+      <button className="queue-trade-button" onClick={queueTrade}>
+        {queued ? "Queued" : "Queue Trade"}
+      </button>
+
       {advice.warnings?.length > 0 && (
         <div className="trade-warnings">
           <strong>Warnings</strong>
+
           <ul>
             {advice.warnings.map((w, i) => (
               <li key={i}>{w}</li>
