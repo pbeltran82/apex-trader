@@ -20,9 +20,7 @@ def manage_execution_queue():
         if current_price is None:
             trade["status"] = "ERROR"
             trade["message"] = "No price available."
-
             log_event(f"{symbol} execution error: No price available.", "ERROR")
-
             updates.append(trade)
             continue
 
@@ -32,9 +30,7 @@ def manage_execution_queue():
         if trade["status"] == "WAITING":
             trade["status"] = "CHECKING"
             trade["message"] = "Checking market conditions."
-
             log_event(f"{symbol} checking market conditions.", "CHECKING")
-
             updates.append(trade)
             continue
 
@@ -44,31 +40,30 @@ def manage_execution_queue():
             if current_price <= entry * 1.01:
                 trade["status"] = "EXECUTING"
                 trade["message"] = "Entry conditions acceptable. Executing paper trade."
-
-                log_event(
-                    f"{symbol} entry acceptable. Executing paper trade.",
-                    "EXECUTING",
-                )
+                log_event(f"{symbol} entry acceptable. Executing paper trade.", "EXECUTING")
             else:
                 trade["status"] = "WAITING"
                 trade["message"] = "Price moved away from entry. Waiting."
-
-                log_event(
-                    f"{symbol} price moved away from entry. Waiting.",
-                    "WAITING",
-                )
+                log_event(f"{symbol} price moved away from entry. Waiting.", "WAITING")
 
             updates.append(trade)
             continue
 
         if trade["status"] == "EXECUTING":
             qty = int(trade.get("shares", 1))
-            result = buy_symbol(symbol, qty=qty)
+
+            result = buy_symbol(
+                symbol,
+                qty=qty,
+                sector=trade.get("sector", "Other"),
+                confidence=trade.get("confidence", 0),
+                strategy=trade.get("strategy", "Momentum"),
+                market_bias=trade.get("market_bias", "Bullish"),
+            )
 
             if result.get("error"):
                 trade["status"] = "ERROR"
                 trade["message"] = result["error"]
-
                 log_event(f"{symbol} execution error: {trade['message']}", "ERROR")
             else:
                 trade["status"] = "FILLED"
@@ -86,15 +81,9 @@ def manage_execution_queue():
                     source="EXECUTION_MANAGER",
                 )
 
-                log_event(
-                    f"{symbol} filled for {qty} share(s) at ${current_price}.",
-                    "FILLED",
-                )
+                log_event(f"{symbol} filled for {qty} share(s) at ${current_price}.", "FILLED")
 
             updates.append(trade)
             continue
 
-    return {
-        "checked": len(execution_queue),
-        "updates": updates,
-    }
+    return {"checked": len(execution_queue), "updates": updates}

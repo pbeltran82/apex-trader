@@ -24,6 +24,7 @@ from backend.routes.autopilot import router as autopilot_router
 from backend.routes.equity_curve import router as equity_curve_router
 from backend.routes.risk_governor import router as risk_governor_router
 from backend.routes.autopilot_scheduler import router as autopilot_scheduler_router
+from backend.routes.trade_intelligence import router as trade_intelligence_router
 
 app = FastAPI(title="Kyle Trader API")
 
@@ -58,6 +59,7 @@ app.include_router(autopilot_router, prefix="/api")
 app.include_router(equity_curve_router, prefix="/api")
 app.include_router(risk_governor_router, prefix="/api")
 app.include_router(autopilot_scheduler_router, prefix="/api")
+app.include_router(trade_intelligence_router, prefix="/api")
 
 
 @app.get("/")
