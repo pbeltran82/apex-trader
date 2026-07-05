@@ -20,8 +20,10 @@ from backend.routes.trade_history import router as trade_history_router
 from backend.routes.performance import router as performance_router
 from backend.routes.exit import router as exit_router
 from backend.routes.auto_exit import router as auto_exit_router
-from backend.routes.equity_curve import router as equity_curve_router
 from backend.routes.autopilot import router as autopilot_router
+from backend.routes.equity_curve import router as equity_curve_router
+from backend.routes.risk_governor import router as risk_governor_router
+from backend.routes.autopilot_scheduler import router as autopilot_scheduler_router
 
 app = FastAPI(title="Kyle Trader API")
 
@@ -40,8 +42,8 @@ app.include_router(backtester_router, prefix="/api")
 app.include_router(ai_router, prefix="/api")
 app.include_router(trade_planner_router, prefix="/api")
 app.include_router(scanner_router, prefix="/api")
-app.include_router(portfolio_ai_router,prefix="/api")
-app.include_router(portfolio_coach_router,prefix="/api")
+app.include_router(portfolio_ai_router, prefix="/api")
+app.include_router(portfolio_coach_router, prefix="/api")
 app.include_router(position_advisor_router, prefix="/api")
 app.include_router(daily_plan_router, prefix="/api")
 app.include_router(execution_queue_router, prefix="/api")
@@ -52,12 +54,12 @@ app.include_router(trade_history_router, prefix="/api")
 app.include_router(performance_router, prefix="/api")
 app.include_router(exit_router, prefix="/api")
 app.include_router(auto_exit_router, prefix="/api")
-app.include_router(equity_curve_router, prefix="/api")
 app.include_router(autopilot_router, prefix="/api")
+app.include_router(equity_curve_router, prefix="/api")
+app.include_router(risk_governor_router, prefix="/api")
+app.include_router(autopilot_scheduler_router, prefix="/api")
 
 
 @app.get("/")
 def root():
     return {"status": "Kyle Trader backend running"}
-
-    

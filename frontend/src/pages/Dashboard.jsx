@@ -22,7 +22,8 @@ import PerformancePanel from "../components/PerformancePanel";
 import AutoExitPanel from "../components/AutoExitPanel";
 import NotificationsPanel from "../components/NotificationsPanel";
 import EquityCurvePanel from "../components/EquityCurvePanel";
-
+import RiskGovernorPanel from "../components/RiskGovernorPanel";
+import AutopilotPanel from "../components/AutopilotPanel";
 
 
 const API = "/api";
@@ -98,6 +99,10 @@ export default function Dashboard() {
           <PerformancePanel />
 
           <EquityCurvePanel />
+
+          <AutopilotPanel />
+
+          <RiskGovernorPanel />
 
           <AutoExitPanel />
 
