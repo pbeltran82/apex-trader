@@ -1,38 +1,62 @@
 from datetime import datetime
 
-from backend.activity_log import log_event
+from backend.decision_engine import evaluate_trade
+from backend.sector_map import get_sector
 
 execution_queue = []
 
 
-def next_id():
-    return len(execution_queue) + 1
+def _find_trade(symbol):
+    symbol = symbol.upper()
+
+    for trade in execution_queue:
+        if trade["symbol"] == symbol and trade["status"] not in [
+            "FILLED",
+            "COMPLETED",
+        ]:
+            return trade
+
+    return None
 
 
 def queue_trade_from_advice(symbol, advice):
     symbol = symbol.upper()
 
-    existing = None
-    for trade in execution_queue:
-        if trade["symbol"] == symbol and trade["status"] not in [
-            "COMPLETED",
-            "FILLED",
-        ]:
-            existing = trade
-            break
+    base_confidence = advice.get("trade_plan", {}).get("confidence", 0)
+    sector = advice.get("sector") or get_sector(symbol)
+    strategy = advice.get("strategy", "Momentum")
 
-    if not advice.get("approved"):
+    decision = evaluate_trade(
+        symbol=symbol,
+        confidence=base_confidence,
+        strategy=strategy,
+        sector=sector,
+    )
+
+    estimated_cost = advice.get("estimated_cost")
+
+    if estimated_cost is None:
+        estimated_cost = round(
+            advice.get("current_price", 0)
+            * advice.get("recommended_shares", 1),
+            2,
+        )
+
+    if not advice.get("approved") or not decision["approved"]:
+        existing = _find_trade(symbol)
+
+        reason = advice.get("reason", "Trade was not approved.")
+
+        if not decision["approved"]:
+            reason = f"Decision Engine rejected trade: {decision['recommendation']}."
+
         if existing:
             existing["status"] = "REJECTED"
-            existing["reason"] = advice.get("reason", "Trade was not approved.")
-            existing["message"] = "Trade rejected by latest advice."
+            existing["reason"] = reason
+            existing["message"] = "Trade rejected by Decision Engine."
             existing["attempts"] = existing.get("attempts", 1) + 1
             existing["last_updated"] = datetime.utcnow().isoformat()
-
-            log_event(
-                f"{symbol} rejected again. Attempts: {existing['attempts']}",
-                "REJECTED",
-            )
+            existing["decision"] = decision
 
             return {
                 "ok": False,
@@ -42,18 +66,17 @@ def queue_trade_from_advice(symbol, advice):
             }
 
         trade = {
-            "id": next_id(),
+            "id": len(execution_queue) + 1,
             "symbol": symbol,
             "status": "REJECTED",
-            "reason": advice.get("reason", "Trade was not approved."),
-            "message": "Trade rejected by advisor.",
+            "reason": reason,
+            "message": "Trade rejected by Decision Engine.",
             "attempts": 1,
             "created": datetime.utcnow().isoformat(),
+            "decision": decision,
         }
 
         execution_queue.append(trade)
-
-        log_event(f"{symbol} rejected by advisor: {trade['reason']}", "REJECTED")
 
         return {
             "ok": False,
@@ -62,24 +85,41 @@ def queue_trade_from_advice(symbol, advice):
             "queue_size": len(execution_queue),
         }
 
-    if existing:
-        existing.update(
-            {
-                "status": "WAITING",
-                "confidence": advice["trade_plan"]["confidence"],
-                "entry": advice["current_price"],
-                "shares": advice["recommended_shares"],
-                "allocation": advice["recommended_allocation_pct"],
-                "estimated_cost": advice["recommended_dollars"],
-                "sector": advice["sector"],
-                "reason": advice["reason"],
-                "message": "Trade updated and waiting for execution manager.",
-                "attempts": existing.get("attempts", 1) + 1,
-                "last_updated": datetime.utcnow().isoformat(),
-            }
-        )
+    existing = _find_trade(symbol)
 
-        log_event(f"{symbol} trade updated and queued.", "QUEUE")
+    decision_reason = (
+        f"{symbol} approved by Decision Engine. "
+        f"Decision Score: {decision['decision_score']}. "
+        f"Recommendation: {decision['recommendation']}. "
+        f"Allocation: {decision['recommended_allocation_pct']}%. "
+        f"Strategy: {strategy}. "
+        f"Sector: {sector}."
+    )
+
+    trade_payload = {
+        "symbol": symbol,
+        "status": "WAITING",
+        "confidence": decision["decision_score"],
+        "base_confidence": base_confidence,
+        "decision_score": decision["decision_score"],
+        "recommendation": decision["recommendation"],
+        "decision": decision,
+        "entry": advice["current_price"],
+        "shares": advice.get("recommended_shares", 1),
+        "allocation": decision["recommended_allocation_pct"],
+        "estimated_cost": estimated_cost,
+        "sector": sector,
+        "strategy": strategy,
+        "market_bias": advice.get("market_bias", "Bullish"),
+        "reason": decision_reason,
+        "last_checked": None,
+        "message": "Queued and waiting for execution manager.",
+    }
+
+    if existing:
+        existing.update(trade_payload)
+        existing["attempts"] = existing.get("attempts", 1) + 1
+        existing["last_updated"] = datetime.utcnow().isoformat()
 
         return {
             "ok": True,
@@ -89,28 +129,13 @@ def queue_trade_from_advice(symbol, advice):
         }
 
     trade = {
-        "id": next_id(),
-        "symbol": symbol,
-        "status": "WAITING",
-        "confidence": advice["trade_plan"]["confidence"],
-        "entry": advice["current_price"],
-        "shares": advice["recommended_shares"],
-        "allocation": advice["recommended_allocation_pct"],
-        "estimated_cost": advice["recommended_dollars"],
-        "sector": advice["sector"],
-        "reason": advice["reason"],
+        "id": len(execution_queue) + 1,
+        **trade_payload,
         "attempts": 1,
         "created": datetime.utcnow().isoformat(),
-        "last_checked": None,
-        "message": "Queued and waiting for execution manager.",
     }
 
     execution_queue.append(trade)
-
-    log_event(
-        f"{symbol} queued: {trade['shares']} share(s) at ${trade['entry']}",
-        "QUEUE",
-    )
 
     return {
         "ok": True,
@@ -120,43 +145,42 @@ def queue_trade_from_advice(symbol, advice):
     }
 
 
+def queue_trade(symbol, advice):
+    return queue_trade_from_advice(symbol, advice)
+
+
 def get_execution_queue():
     return execution_queue
+
+
+def clear_execution_queue():
+    execution_queue.clear()
+    return {"ok": True, "queue_size": 0}
+
+
+def clear_queue():
+    return clear_execution_queue()
 
 
 def execute_trade(symbol):
     symbol = symbol.upper()
 
     for trade in execution_queue:
-        if trade["symbol"] == symbol and trade["status"] == "WAITING":
+        if trade["symbol"] == symbol:
             trade["status"] = "ACTIVE"
             trade["executed"] = datetime.utcnow().isoformat()
-            trade["message"] = "Manually marked active."
-
-            log_event(f"{symbol} manually marked active.", "ACTIVE")
-
             return trade
 
-    return {"error": "Waiting trade not found."}
+    return {"error": "Trade not found."}
 
 
 def complete_trade(symbol):
     symbol = symbol.upper()
 
     for trade in execution_queue:
-        if trade["symbol"] == symbol and trade["status"] in ["ACTIVE", "FILLED"]:
+        if trade["symbol"] == symbol:
             trade["status"] = "COMPLETED"
             trade["completed"] = datetime.utcnow().isoformat()
-            trade["message"] = "Trade completed."
-
-            log_event(f"{symbol} trade completed.", "COMPLETED")
-
             return trade
 
-    return {"error": "Active or filled trade not found."}
-
-
-def clear_queue():
-    execution_queue.clear()
-    log_event("Execution queue cleared.", "SYSTEM")
-    return {"ok": True, "queue_size": 0}
+    return {"error": "Trade not found."}
