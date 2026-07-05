@@ -5,6 +5,7 @@ const API = "/api";
 export default function AutoExitPanel() {
   const [status, setStatus] = useState(null);
   const [running, setRunning] = useState(false);
+  const [autoRun, setAutoRun] = useState(false);
 
   const loadStatus = async () => {
     try {
@@ -41,6 +42,14 @@ export default function AutoExitPanel() {
     return () => clearInterval(id);
   }, []);
 
+  useEffect(() => {
+    if (!autoRun) return;
+
+    const id = setInterval(runAutoExit, 5000);
+
+    return () => clearInterval(id);
+  }, [autoRun]);
+
   if (!status) return null;
 
   return (
@@ -72,9 +81,18 @@ export default function AutoExitPanel() {
         </div>
       </div>
 
-      <button className="auto-exit-button" onClick={runAutoExit}>
-        {running ? "Checking..." : "Run Exit Check"}
-      </button>
+      <div className="auto-exit-controls">
+        <button className="auto-exit-button" onClick={runAutoExit}>
+          {running ? "Checking..." : "Run Exit Check"}
+        </button>
+
+        <button
+          className={`auto-exit-auto-button ${autoRun ? "active" : ""}`}
+          onClick={() => setAutoRun((value) => !value)}
+        >
+          {autoRun ? "Auto Exit ON" : "Auto Exit OFF"}
+        </button>
+      </div>
 
       {status.last_exit ? (
         <div className="auto-exit-last">

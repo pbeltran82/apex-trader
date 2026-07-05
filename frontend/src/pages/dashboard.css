@@ -1438,3 +1438,120 @@ tbody tr:hover {
   color: var(--muted);
   margin: 10px 0 0;
 }
+
+.auto-exit-controls {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.auto-exit-auto-button {
+  width: 100%;
+  margin-top: 14px;
+  background: rgba(148, 163, 184, 0.12);
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 12px;
+  font-weight: 900;
+  cursor: pointer;
+}
+
+.auto-exit-auto-button.active {
+  background: rgba(34, 197, 94, 0.18);
+  color: var(--green);
+  border-color: rgba(34, 197, 94, 0.45);
+}
+
+.toast-notification {
+  position: fixed;
+  top: 22px;
+  right: 22px;
+  z-index: 9999;
+  width: 340px;
+  background: #111827;
+  border: 1px solid rgba(34, 197, 94, 0.45);
+  border-radius: 16px;
+  padding: 16px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.45);
+  animation: toastSlideIn 0.25s ease-out;
+}
+
+.toast-notification strong {
+  display: block;
+  color: var(--green);
+  margin-bottom: 6px;
+  font-size: 13px;
+}
+
+.toast-notification p {
+  margin: 0;
+  color: white;
+  font-weight: 800;
+  line-height: 1.35;
+}
+
+.toast-notification span {
+  display: block;
+  margin-top: 8px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.toast-notification.error,
+.toast-notification.rejected {
+  border-color: rgba(239, 68, 68, 0.5);
+}
+
+.toast-notification.error strong,
+.toast-notification.rejected strong {
+  color: #ff6b6b;
+}
+
+.toast-notification.sell {
+  border-color: rgba(59, 130, 246, 0.5);
+}
+
+.toast-notification.sell strong {
+  color: #60a5fa;
+}
+
+@keyframes toastSlideIn {
+  from {
+    opacity: 0;
+    transform: translateX(24px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+.equity-chart {
+  height: 170px;
+  background: var(--panel-deep);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 12px;
+}
+
+.equity-chart svg {
+  width: 100%;
+  height: 100%;
+}
+
+.equity-chart path {
+  fill: none;
+  stroke: var(--green);
+  stroke-width: 3;
+  vector-effect: non-scaling-stroke;
+}
+
+.equity-range {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 10px;
+  color: var(--muted);
+  font-size: 11px;
+}

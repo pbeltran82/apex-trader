@@ -1,5 +1,5 @@
+import "./dashboard.css";
 import { useEffect, useState } from "react";
-
 import Sidebar from "../components/Sidebar";
 import Header from "../components/Header";
 import SummaryCards from "../components/SummaryCards";
@@ -20,8 +20,10 @@ import TradeTimeline from "../components/TradeTimeline";
 import TradeHistoryPanel from "../components/TradeHistoryPanel";
 import PerformancePanel from "../components/PerformancePanel";
 import AutoExitPanel from "../components/AutoExitPanel";
+import NotificationsPanel from "../components/NotificationsPanel";
+import EquityCurvePanel from "../components/EquityCurvePanel";
 
-import "./dashboard.css";
+
 
 const API = "/api";
 
@@ -95,6 +97,8 @@ export default function Dashboard() {
 
           <PerformancePanel />
 
+          <EquityCurvePanel />
+
           <AutoExitPanel />
 
           </section>
@@ -106,6 +110,8 @@ export default function Dashboard() {
               onSelect={handleSelectSymbol}
               onBuy={buy}
             />
+
+            <NotificationsPanel />
 
             <MarketScannerPanel onSelect={handleSelectSymbol} />
 
