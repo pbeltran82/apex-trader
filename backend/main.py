@@ -16,6 +16,10 @@ from backend.routes.execution_queue import router as execution_queue_router
 from backend.routes.execution_manager import router as execution_manager_router
 from backend.routes.activity import router as activity_router
 from backend.routes.portfolio_live import router as portfolio_live_router
+from backend.routes.trade_history import router as trade_history_router
+from backend.routes.performance import router as performance_router
+from backend.routes.exit import router as exit_router
+from backend.routes.auto_exit import router as auto_exit_router
 
 app = FastAPI(title="Kyle Trader API")
 
@@ -42,6 +46,11 @@ app.include_router(execution_queue_router, prefix="/api")
 app.include_router(execution_manager_router, prefix="/api")
 app.include_router(activity_router, prefix="/api")
 app.include_router(portfolio_live_router, prefix="/api")
+app.include_router(trade_history_router, prefix="/api")
+app.include_router(performance_router, prefix="/api")
+app.include_router(exit_router, prefix="/api")
+app.include_router(auto_exit_router, prefix="/api")
+
 
 @app.get("/")
 def root():

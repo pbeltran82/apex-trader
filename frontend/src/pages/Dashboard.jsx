@@ -17,6 +17,9 @@ import OrderTicket from "../components/OrderTicket";
 import BacktesterPanel from "../components/BacktesterPanel";
 import PositionsTable from "../components/PositionsTable";
 import TradeTimeline from "../components/TradeTimeline";
+import TradeHistoryPanel from "../components/TradeHistoryPanel";
+import PerformancePanel from "../components/PerformancePanel";
+import AutoExitPanel from "../components/AutoExitPanel";
 
 import "./dashboard.css";
 
@@ -89,6 +92,11 @@ export default function Dashboard() {
             />
 
             <PositionsTable positions={portfolioLive?.positions || []} />
+
+          <PerformancePanel />
+
+          <AutoExitPanel />
+
           </section>
 
           <aside className="right-rail">
@@ -121,6 +129,8 @@ export default function Dashboard() {
             />
 
             <BacktesterPanel selectedSymbol={selectedSymbol} />
+
+            <TradeHistoryPanel />
 
             <TradeTimeline trades={trades} />
           </aside>

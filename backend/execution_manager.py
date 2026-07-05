@@ -4,6 +4,7 @@ from backend.activity_log import log_event
 from backend.execution_engine import execution_queue
 from backend.market import prices
 from backend.portfolio import buy_symbol
+from backend.trade_history import record_trade
 
 
 def manage_execution_queue():
@@ -75,6 +76,15 @@ def manage_execution_queue():
                 trade["filled_qty"] = qty
                 trade["filled_at"] = datetime.utcnow().isoformat()
                 trade["message"] = f"Paper trade filled for {qty} share(s)."
+
+                record_trade(
+                    side="BUY",
+                    symbol=symbol,
+                    qty=qty,
+                    price=current_price,
+                    total=current_price * qty,
+                    source="EXECUTION_MANAGER",
+                )
 
                 log_event(
                     f"{symbol} filled for {qty} share(s) at ${current_price}.",

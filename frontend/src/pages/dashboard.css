@@ -1319,3 +1319,122 @@ tbody tr:hover {
     font-size:11px;
     color:#9ca3af;
 }
+
+.trade-stats-mini {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.trade-stats-mini div {
+  background: var(--panel-deep);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px;
+}
+
+.trade-stats-mini span {
+  display: block;
+  color: var(--muted);
+  font-size: 11px;
+  margin-bottom: 4px;
+}
+
+.trade-history-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.trade-history-row {
+  display: grid;
+  grid-template-columns: 1fr auto auto auto auto;
+  gap: 10px;
+  align-items: center;
+  background: var(--panel-deep);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 12px;
+}
+
+.trade-history-row p {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.performance-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 12px;
+}
+
+.performance-grid div {
+  background: var(--panel-deep);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 12px;
+}
+
+.performance-grid span {
+  display: block;
+  color: var(--muted);
+  font-size: 11px;
+  text-transform: uppercase;
+  margin-bottom: 5px;
+}
+
+.performance-grid strong {
+  font-size: 15px;
+}
+
+.performance-summary {
+  margin: 14px 0 0;
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+.auto-exit-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 12px;
+}
+
+.auto-exit-grid div,
+.auto-exit-last {
+  background: var(--panel-deep);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 12px;
+}
+
+.auto-exit-grid span {
+  display: block;
+  color: var(--muted);
+  font-size: 11px;
+  text-transform: uppercase;
+  margin-bottom: 5px;
+}
+
+.auto-exit-button {
+  width: 100%;
+  margin-top: 14px;
+  background: rgba(34, 197, 94, 0.14);
+  color: var(--green);
+  border: 1px solid rgba(34, 197, 94, 0.35);
+  border-radius: 12px;
+  padding: 12px;
+  font-weight: 900;
+  cursor: pointer;
+}
+
+.auto-exit-last {
+  margin-top: 14px;
+}
+
+.auto-exit-last p,
+.auto-exit-muted {
+  color: var(--muted);
+  margin: 10px 0 0;
+}
