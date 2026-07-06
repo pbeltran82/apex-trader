@@ -1,7 +1,7 @@
 from backend.emergency_stop import status as emergency_stop_status
 from backend.trade_history import get_today_realized_pnl
 from backend.drawdown_guard import get_drawdown_status
-
+from backend.broker_health import status as broker_health_status
 
 # ===== Risk Policy =====
 
@@ -40,6 +40,14 @@ def build_risk_engine():
         trading_allowed = False
         reasons.append(
             f"Emergency stop is active: {emergency['reason']}"
+        )
+
+    broker = broker_health_status()
+
+    if not broker["connected"]:
+        trading_allowed = False
+        reasons.append(
+            f"Broker health check failed: {broker['last_error']}"
         )
 
     # ----------------------------------------------------
@@ -128,4 +136,5 @@ def build_risk_engine():
         },
 
         "reasons": reasons,
+        "broker_health": broker,
     }

@@ -59,6 +59,9 @@ from backend.routes.risk_engine import (
 )
 from backend.routes.emergency_stop import router as emergency_stop_router
 from backend.routes.drawdown_guard import router as drawdown_guard_router
+from backend.routes.broker_health import (
+    router as broker_health_router,
+)
 
 
 app = FastAPI(title="Kyle Trader API")
@@ -114,7 +117,10 @@ app.include_router(correlation_engine_router, prefix="/api")
 app.include_router(volatility_intelligence_router, prefix="/api")
 app.include_router(emergency_stop_router, prefix="/api")
 app.include_router(drawdown_guard_router, prefix="/api")
-
+app.include_router(
+    broker_health_router,
+    prefix="/api",
+)
 
 @app.get("/")
 def root():
