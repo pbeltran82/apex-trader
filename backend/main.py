@@ -34,6 +34,18 @@ from backend.position_monitor import (
     stop_position_monitor,
 )
 from backend.routes.daily_scheduler import router as daily_scheduler_router
+from backend.routes.autopilot_orchestrator import router as autopilot_orchestrator_router
+from backend.routes.mission_control import router as mission_control_router
+from backend.routes.ceo_briefing import router as ceo_briefing_router
+from backend.routes.event_log import router as event_log_router
+from backend.routes.alerts import router as alerts_router
+from backend.routes.health_score import router as health_score_router
+from backend.routes.executive_dashboard import (
+    router as executive_dashboard_router,
+)
+from backend.routes.market_regime import router as market_regime_router
+from backend.routes.sector_rotation import router as sector_rotation_router
+
 
 app = FastAPI(title="Kyle Trader API")
 
@@ -76,6 +88,14 @@ app.include_router(trade_intelligence_router, prefix="/api")
 app.include_router(decision_intelligence_router, prefix="/api")
 app.include_router(decision_engine_router, prefix="/api")
 app.include_router(exit_manager_router, prefix="/api")
+app.include_router(autopilot_orchestrator_router, prefix="/api")
+app.include_router(mission_control_router, prefix="/api")
+app.include_router(ceo_briefing_router, prefix="/api")
+app.include_router(event_log_router, prefix="/api")
+app.include_router(alerts_router, prefix="/api")
+app.include_router(health_score_router, prefix="/api")
+app.include_router(market_regime_router, prefix="/api")
+app.include_router(sector_rotation_router, prefix="/api")
 
 
 @app.get("/")
@@ -97,3 +117,8 @@ app.include_router(
     daily_scheduler_router,
     prefix="/api",
 ) 
+
+app.include_router(
+    executive_dashboard_router,
+    prefix="/api",
+)
