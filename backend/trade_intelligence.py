@@ -1,5 +1,7 @@
 from datetime import datetime
 
+from backend.database import get_connection
+
 trade_intelligence = []
 
 
@@ -8,11 +10,60 @@ def classify_outcome(realized_pnl):
 
     if realized_pnl > 0:
         return "WIN"
-
     if realized_pnl < 0:
         return "LOSS"
-
     return "SCRATCH"
+
+
+def _ensure_trade_learning_table():
+    conn = get_connection()
+    cur = conn.cursor()
+
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS trade_learning (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        time TEXT,
+        symbol TEXT,
+        strategy TEXT,
+        sector TEXT,
+        confidence REAL,
+        market_bias TEXT,
+        entry_price REAL,
+        exit_price REAL,
+        qty INTEGER,
+        realized_pnl REAL,
+        return_pct REAL,
+        outcome TEXT,
+        won INTEGER,
+        exit_reason TEXT
+    )
+    """)
+
+    conn.commit()
+    conn.close()
+
+
+_ensure_trade_learning_table()
+
+
+def _row_to_record(row):
+    return {
+        "id": row["id"],
+        "time": row["time"],
+        "symbol": row["symbol"],
+        "strategy": row["strategy"],
+        "sector": row["sector"],
+        "confidence": round(float(row["confidence"] or 0), 2),
+        "market_bias": row["market_bias"],
+        "entry_price": round(float(row["entry_price"] or 0), 2),
+        "exit_price": round(float(row["exit_price"] or 0), 2),
+        "qty": int(row["qty"] or 0),
+        "realized_pnl": round(float(row["realized_pnl"] or 0), 2),
+        "return_pct": round(float(row["return_pct"] or 0), 2),
+        "outcome": row["outcome"],
+        "won": bool(row["won"]),
+        "exit_reason": row["exit_reason"],
+    }
 
 
 def record_trade_intelligence(
@@ -35,10 +86,45 @@ def record_trade_intelligence(
     cost_basis = entry_price * qty
     return_pct = (realized_pnl / cost_basis) * 100 if cost_basis else 0
     outcome = classify_outcome(realized_pnl)
+    now = datetime.utcnow().isoformat()
 
-    record = {
-        "id": len(trade_intelligence) + 1,
-        "time": datetime.utcnow().isoformat(),
+    conn = get_connection()
+    cur = conn.cursor()
+
+    cur.execute(
+        """
+        INSERT INTO trade_learning (
+            time, symbol, strategy, sector, confidence, market_bias,
+            entry_price, exit_price, qty, realized_pnl, return_pct,
+            outcome, won, exit_reason
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            now,
+            symbol.upper(),
+            strategy,
+            sector,
+            round(float(confidence), 2),
+            market_bias,
+            round(entry_price, 2),
+            round(exit_price, 2),
+            qty,
+            round(realized_pnl, 2),
+            round(return_pct, 2),
+            outcome,
+            1 if outcome == "WIN" else 0,
+            exit_reason,
+        ),
+    )
+
+    record_id = cur.lastrowid
+    conn.commit()
+    conn.close()
+
+    return {
+        "id": record_id,
+        "time": now,
         "symbol": symbol.upper(),
         "strategy": strategy,
         "sector": sector,
@@ -54,15 +140,28 @@ def record_trade_intelligence(
         "exit_reason": exit_reason,
     }
 
-    trade_intelligence.insert(0, record)
-    return record
-
 
 def get_trade_intelligence_records():
-    return trade_intelligence
+    conn = get_connection()
+    rows = conn.execute(
+        """
+        SELECT *
+        FROM trade_learning
+        ORDER BY id DESC
+        """
+    ).fetchall()
+    conn.close()
+
+    return [_row_to_record(row) for row in rows]
 
 
 def clear_trade_intelligence():
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("DELETE FROM trade_learning")
+    conn.commit()
+    conn.close()
+
     trade_intelligence.clear()
     return {"ok": True, "count": 0}
 
@@ -102,31 +201,17 @@ def summarize_group(records, key):
         trades = group["trades"]
         decisive_trades = group["wins"] + group["losses"]
 
-        group["win_rate"] = (
-            round((group["wins"] / decisive_trades) * 100, 2)
-            if decisive_trades
-            else 0.0
-        )
-        group["loss_rate"] = (
-            round((group["losses"] / decisive_trades) * 100, 2)
-            if decisive_trades
-            else 0.0
-        )
-        group["scratch_rate"] = (
-            round((group["scratches"] / trades) * 100, 2)
-            if trades
-            else 0.0
-        )
-        group["avg_return_pct"] = (
-            round(group["total_return_pct"] / trades, 2) if trades else 0.0
-        )
+        group["win_rate"] = round((group["wins"] / decisive_trades) * 100, 2) if decisive_trades else 0.0
+        group["loss_rate"] = round((group["losses"] / decisive_trades) * 100, 2) if decisive_trades else 0.0
+        group["scratch_rate"] = round((group["scratches"] / trades) * 100, 2) if trades else 0.0
+        group["avg_return_pct"] = round(group["total_return_pct"] / trades, 2) if trades else 0.0
         group["total_pnl"] = round(group["total_pnl"], 2)
 
     return groups
 
 
 def get_trade_intelligence_summary():
-    records = trade_intelligence
+    records = get_trade_intelligence_records()
 
     wins = [r for r in records if (r.get("outcome") or classify_outcome(r["realized_pnl"])) == "WIN"]
     losses = [r for r in records if (r.get("outcome") or classify_outcome(r["realized_pnl"])) == "LOSS"]
@@ -137,35 +222,12 @@ def get_trade_intelligence_summary():
 
     total_pnl = round(sum(r["realized_pnl"] for r in records), 2)
 
-    win_rate = (
-        round((len(wins) / decisive_trades) * 100, 2)
-        if decisive_trades
-        else 0.0
-    )
+    win_rate = round((len(wins) / decisive_trades) * 100, 2) if decisive_trades else 0.0
+    loss_rate = round((len(losses) / decisive_trades) * 100, 2) if decisive_trades else 0.0
+    scratch_rate = round((len(scratches) / total_trades) * 100, 2) if total_trades else 0.0
 
-    loss_rate = (
-        round((len(losses) / decisive_trades) * 100, 2)
-        if decisive_trades
-        else 0.0
-    )
-
-    scratch_rate = (
-        round((len(scratches) / total_trades) * 100, 2)
-        if total_trades
-        else 0.0
-    )
-
-    avg_win = (
-        round(sum(r["realized_pnl"] for r in wins) / len(wins), 2)
-        if wins
-        else 0.0
-    )
-
-    avg_loss = (
-        round(sum(r["realized_pnl"] for r in losses) / len(losses), 2)
-        if losses
-        else 0.0
-    )
+    avg_win = round(sum(r["realized_pnl"] for r in wins) / len(wins), 2) if wins else 0.0
+    avg_loss = round(sum(r["realized_pnl"] for r in losses) / len(losses), 2) if losses else 0.0
 
     gross_profit = sum(r["realized_pnl"] for r in wins)
     gross_loss = abs(sum(r["realized_pnl"] for r in losses))

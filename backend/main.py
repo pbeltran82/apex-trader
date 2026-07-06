@@ -27,8 +27,19 @@ from backend.routes.autopilot_scheduler import router as autopilot_scheduler_rou
 from backend.routes.trade_intelligence import router as trade_intelligence_router
 from backend.routes.decision_intelligence import router as decision_intelligence_router
 from backend.routes.decision_engine import router as decision_engine_router
+from backend.database import initialize_database
+from backend.routes.exit_manager import router as exit_manager_router
+from backend.position_monitor import (
+    start_position_monitor,
+    stop_position_monitor,
+)
+from backend.routes.daily_scheduler import router as daily_scheduler_router
 
 app = FastAPI(title="Kyle Trader API")
+
+
+
+initialize_database()
 
 app.add_middleware(
     CORSMiddleware,
@@ -64,8 +75,25 @@ app.include_router(autopilot_scheduler_router, prefix="/api")
 app.include_router(trade_intelligence_router, prefix="/api")
 app.include_router(decision_intelligence_router, prefix="/api")
 app.include_router(decision_engine_router, prefix="/api")
+app.include_router(exit_manager_router, prefix="/api")
 
 
 @app.get("/")
 def root():
     return {"status": "Kyle Trader backend running"}
+
+@app.on_event("startup")
+async def startup_event():
+    print("Starting Kyle services...")
+    start_position_monitor()
+
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    print("Stopping Kyle services...")
+    stop_position_monitor()    
+
+app.include_router(
+    daily_scheduler_router,
+    prefix="/api",
+) 
