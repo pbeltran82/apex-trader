@@ -5,9 +5,21 @@ from backend.execution_engine import execution_queue
 from backend.market import prices
 from backend.portfolio import buy_symbol
 from backend.trade_history import record_trade
+from backend.risk_engine import build_risk_engine
 
 
 def manage_execution_queue():
+    risk = build_risk_engine()
+
+    if not risk["trading_allowed"]:
+        return {
+            "checked": 0,
+            "blocked": True,
+            "reason": risk["reasons"],
+            "risk": risk,
+            "updates": [],
+    }
+    
     updates = []
 
     for trade in execution_queue:

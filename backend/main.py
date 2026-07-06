@@ -1,6 +1,5 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-
 from backend.routes.account import router as account_router
 from backend.routes.market import router as market_router
 from backend.routes.portfolio import router as portfolio_router
@@ -45,6 +44,21 @@ from backend.routes.executive_dashboard import (
 )
 from backend.routes.market_regime import router as market_regime_router
 from backend.routes.sector_rotation import router as sector_rotation_router
+from backend.routes.correlation_engine import router as correlation_engine_router
+from backend.routes.volatility_intelligence import (
+    router as volatility_intelligence_router,
+)
+from backend.routes.capital_allocator import (
+    router as capital_allocator_router,
+)
+from backend.routes.portfolio_constraints import (
+    router as portfolio_constraints_router,
+)
+from backend.routes.risk_engine import (
+    router as risk_engine_router,
+)
+from backend.routes.emergency_stop import router as emergency_stop_router
+from backend.routes.drawdown_guard import router as drawdown_guard_router
 
 
 app = FastAPI(title="Kyle Trader API")
@@ -96,6 +110,10 @@ app.include_router(alerts_router, prefix="/api")
 app.include_router(health_score_router, prefix="/api")
 app.include_router(market_regime_router, prefix="/api")
 app.include_router(sector_rotation_router, prefix="/api")
+app.include_router(correlation_engine_router, prefix="/api")
+app.include_router(volatility_intelligence_router, prefix="/api")
+app.include_router(emergency_stop_router, prefix="/api")
+app.include_router(drawdown_guard_router, prefix="/api")
 
 
 @app.get("/")
@@ -120,5 +138,20 @@ app.include_router(
 
 app.include_router(
     executive_dashboard_router,
+    prefix="/api",
+)
+
+app.include_router(
+    capital_allocator_router,
+    prefix="/api",
+)
+
+app.include_router(
+    portfolio_constraints_router,
+    prefix="/api",
+)
+
+app.include_router(
+    risk_engine_router,
     prefix="/api",
 )

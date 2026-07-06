@@ -1,8 +1,4 @@
-from backend.decision_intelligence import adjust_trade_confidence
-from backend.adaptive_intelligence import get_adaptive_state
-from backend.market_regime import get_market_regime
-from backend.sector_rotation import get_sector_rotation_adjustment
-from backend.portfolio_live import build_portfolio_live
+from backend.decision_context import build_decision_context
 
 
 def clamp(value, minimum=0, maximum=100):
@@ -33,9 +29,7 @@ def get_allocation_pct(score):
     return 6.0
 
 
-def get_portfolio_context():
-    portfolio = build_portfolio_live()
-
+def get_portfolio_context(portfolio):
     return {
         "cash_pct": portfolio.get("cash_pct", 100.0),
         "exposure_pct": portfolio.get("exposure_pct", 0.0),
@@ -79,17 +73,36 @@ def evaluate_trade(
     strategy="Momentum",
     sector="Other",
 ):
-    confidence = float(confidence)
-
-    intelligence = adjust_trade_confidence(
+    context = build_decision_context(
+        symbol,
         confidence,
-        strategy=strategy,
-        sector=sector,
+        strategy,
+        sector,
     )
 
-    adjusted_confidence = intelligence["adjusted_confidence"]
+    symbol = context["symbol"]
+    confidence = context["confidence"]
 
-    portfolio_context = get_portfolio_context()
+    intelligence = context["decision_intelligence"]
+    adaptive = context["adaptive"]
+    market_regime = context["market_regime"]
+    sector_rotation = context["sector_rotation"]
+    correlation = context["correlation"]
+    volatility = context.get("volatility")
+
+    volatility_confidence_adjustment = (
+        volatility.get("confidence_adjustment", 0)
+        if volatility and volatility.get("can_affect_decision")
+        else 0
+    )
+
+    volatility_allocation_multiplier = (
+        volatility.get("allocation_multiplier", 1.0)
+        if volatility and volatility.get("can_affect_decision")
+        else 1.0
+    )
+
+    portfolio_context = get_portfolio_context(context["portfolio"])
 
     cash_pct = portfolio_context["cash_pct"]
     exposure_pct = portfolio_context["exposure_pct"]
@@ -101,9 +114,7 @@ def evaluate_trade(
         open_positions,
     )
 
-    adaptive = get_adaptive_state()
-    market_regime = get_market_regime()
-    sector_rotation = get_sector_rotation_adjustment(sector)
+    adjusted_confidence = intelligence["adjusted_confidence"]
 
     decision_score = clamp(
         adjusted_confidence
@@ -111,6 +122,8 @@ def evaluate_trade(
         + adaptive["confidence_adjustment"]
         + market_regime["confidence_adjustment"]
         + sector_rotation["confidence_adjustment"]
+        + correlation["confidence_adjustment"]
+        + volatility_confidence_adjustment
     )
 
     recommendation = get_recommendation(decision_score)
@@ -119,7 +132,9 @@ def evaluate_trade(
         get_allocation_pct(decision_score)
         * adaptive["allocation_multiplier"]
         * market_regime["allocation_multiplier"]
-        * sector_rotation["allocation_multiplier"],
+        * sector_rotation["allocation_multiplier"]
+        * correlation["allocation_multiplier"]
+        * volatility_allocation_multiplier,
         2,
     )
 
@@ -129,6 +144,8 @@ def evaluate_trade(
         intelligence["sector_adjustment"]["reason"],
         market_regime["reason"],
         sector_rotation["reason"],
+        correlation["reason"],
+        volatility["reason"] if volatility else "No volatility data available.",
     ]
 
     reasons.extend(risk_reasons)
@@ -147,7 +164,7 @@ def evaluate_trade(
     reasons.append(adaptive["reason"])
 
     return {
-        "symbol": symbol.upper(),
+        "symbol": symbol,
         "base_confidence": round(confidence, 2),
         "decision_score": round(decision_score, 2),
         "recommendation": recommendation,
@@ -158,11 +175,9 @@ def evaluate_trade(
         "decision_intelligence": intelligence,
         "market_regime": market_regime,
         "sector_rotation": sector_rotation,
-        "portfolio_context": {
-            "cash_pct": cash_pct,
-            "exposure_pct": exposure_pct,
-            "open_positions": open_positions,
-        },
+        "correlation": correlation,
+        "volatility": volatility,
+        "portfolio_context": portfolio_context,
         "adaptive_state": adaptive,
         "reasons": reasons,
         "approved": recommendation in ["SMALL_BUY", "BUY", "STRONG_BUY"],

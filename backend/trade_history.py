@@ -134,3 +134,19 @@ def get_trade_stats():
         "losing_trades": len(losing_sells),
         "win_rate": win_rate,
     }
+
+
+def get_today_realized_pnl():
+    today = datetime.utcnow().date().isoformat()
+    trades = get_trade_history()
+
+    today_sells = [
+        trade for trade in trades
+        if trade.get("side") == "SELL"
+        and str(trade.get("time", "")).startswith(today)
+    ]
+
+    return round(
+        sum(trade.get("realized_pnl", 0) for trade in today_sells),
+        2,
+    )    
