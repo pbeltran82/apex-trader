@@ -3,7 +3,7 @@ from datetime import datetime
 from backend.activity_log import log_event
 from backend.broker_factory import get_broker
 from backend.execution_engine import execution_queue
-from backend.market import prices
+from backend.market_data.service import get_price
 from backend.order import Order
 from backend.order_state import OrderState
 from backend.risk_engine import build_risk_engine
@@ -38,7 +38,7 @@ def manage_execution_queue():
 
         symbol = trade["symbol"]
 
-        current_price = prices.get(symbol)
+        current_price = get_price(symbol)
 
         if current_price is None:
 
