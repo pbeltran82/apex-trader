@@ -4,6 +4,7 @@ from backend.mission_control import build_mission_control
 from backend.alerts import build_alerts
 from backend.health_score import build_health_score
 from backend.event_log import build_timeline
+from backend.health_monitor import build_health_monitor
 
 
 def build_briefing_from_mission_control(mission):
@@ -66,4 +67,5 @@ def build_executive_dashboard():
         "mission_control": mission,
         "alerts": build_alerts(),
         "timeline": build_timeline(limit=10),
+        "operations_health": build_health_monitor(),
     }

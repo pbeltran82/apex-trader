@@ -62,6 +62,19 @@ from backend.routes.drawdown_guard import router as drawdown_guard_router
 from backend.routes.broker_health import (
     router as broker_health_router,
 )
+from backend.routes.reconciliation import (
+    router as reconciliation_router,
+)
+from backend.routes.health_monitor import (
+    router as health_monitor_router,
+)
+from backend.routes.operations_dashboard import (
+    router as operations_dashboard_router,
+)
+from backend.routes.readiness_report import (
+    router as readiness_report_router,
+)
+from backend.routes.burn_in import router as burn_in_router
 
 
 app = FastAPI(title="Kyle Trader API")
@@ -121,6 +134,20 @@ app.include_router(
     broker_health_router,
     prefix="/api",
 )
+app.include_router(
+    health_monitor_router,
+    prefix="/api",
+)
+app.include_router(
+    operations_dashboard_router,
+    prefix="/api",
+)
+app.include_router(
+    readiness_report_router,
+    prefix="/api",
+)
+app.include_router(burn_in_router, prefix="/api")
+
 
 @app.get("/")
 def root():
@@ -159,5 +186,10 @@ app.include_router(
 
 app.include_router(
     risk_engine_router,
+    prefix="/api",
+)
+
+app.include_router(
+    reconciliation_router,
     prefix="/api",
 )
