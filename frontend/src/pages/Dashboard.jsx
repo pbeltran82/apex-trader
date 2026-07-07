@@ -1,152 +1,170 @@
 import "./dashboard.css";
 import { useEffect, useState } from "react";
-import Sidebar from "../components/Sidebar";
-import Header from "../components/Header";
-import SummaryCards from "../components/SummaryCards";
-import DailyPlanPanel from "../components/DailyPlanPanel";
-import TradingChart from "../components/TradingChart";
-import Watchlist from "../components/Watchlist";
-import MarketScannerPanel from "../components/MarketScannerPanel";
-import PortfolioHealthPanel from "../components/PortfolioHealthPanel";
-import ExecutionQueuePanel from "../components/ExecutionQueuePanel";
-import ActivityFeedPanel from "../components/ActivityFeedPanel";
-import PortfolioCoachPanel from "../components/PortfolioCoachPanel";
-import TradeAdvicePanel from "../components/TradeAdvicePanel";
-import AIAssistantPanel from "../components/AIAssistantPanel";
-import OrderTicket from "../components/OrderTicket";
-import BacktesterPanel from "../components/BacktesterPanel";
-import PositionsTable from "../components/PositionsTable";
-import TradeTimeline from "../components/TradeTimeline";
-import TradeHistoryPanel from "../components/TradeHistoryPanel";
-import PerformancePanel from "../components/PerformancePanel";
-import AutoExitPanel from "../components/AutoExitPanel";
-import NotificationsPanel from "../components/NotificationsPanel";
-import EquityCurvePanel from "../components/EquityCurvePanel";
-import RiskGovernorPanel from "../components/RiskGovernorPanel";
-import AutopilotPanel from "../components/AutopilotPanel";
-
 
 const API = "/api";
 
+function formatMoney(value) {
+  const number = Number(value || 0);
+  return number.toLocaleString("en-US", {
+    style: "currency",
+    currency: "USD",
+  });
+}
+
+function StatusDot({ ok }) {
+  return <span className={ok ? "dot green" : "dot red"} />;
+}
+
 export default function Dashboard() {
-  const [portfolioLive, setPortfolioLive] = useState(null);
-  const [trades, setTrades] = useState([]);
-  const [prices, setPrices] = useState({});
-  const [selectedSymbol, setSelectedSymbol] = useState("AAPL");
+  const [executive, setExecutive] = useState(null);
+  const [operations, setOperations] = useState(null);
+  const [readiness, setReadiness] = useState(null);
+  const [burnIn, setBurnIn] = useState(null);
+  const [timeline, setTimeline] = useState([]);
 
   async function loadDashboard() {
     try {
-      const [portfolioData, tradesData, pricesData] = await Promise.all([
-        fetch(`${API}/portfolio-live`).then((r) => r.json()),
-        fetch(`${API}/trades`).then((r) => r.json()),
-        fetch(`${API}/prices`).then((r) => r.json()),
+      const [
+        executiveData,
+        operationsData,
+        readinessData,
+        burnInData,
+        timelineData,
+      ] = await Promise.all([
+        fetch(`${API}/executive-dashboard`).then((r) => r.json()),
+        fetch(`${API}/operations-dashboard`).then((r) => r.json()),
+        fetch(`${API}/readiness-report`).then((r) => r.json()),
+        fetch(`${API}/burn-in`).then((r) => r.json()),
+        fetch(`${API}/timeline`).then((r) => r.json()).catch(() => []),
       ]);
 
-      setPortfolioLive(portfolioData);
-      setTrades(tradesData);
-      setPrices(pricesData);
-    } catch (err) {
-      console.error(err);
+      setExecutive(executiveData);
+      setOperations(operationsData);
+      setReadiness(readinessData);
+      setBurnIn(burnInData);
+      setTimeline(Array.isArray(timelineData) ? timelineData : []);
+    } catch (error) {
+      console.error("Dashboard load failed:", error);
     }
   }
 
   useEffect(() => {
     loadDashboard();
-
-    const timer = setInterval(loadDashboard, 2500);
-
+    const timer = setInterval(loadDashboard, 5000);
     return () => clearInterval(timer);
   }, []);
 
-  async function buy(symbol) {
-    try {
-      await fetch(`${API}/buy/${symbol}`, {
-        method: "POST",
-      });
-
-      loadDashboard();
-    } catch (err) {
-      console.error(err);
-    }
-  }
-
-  function handleSelectSymbol(symbol) {
-    setSelectedSymbol(symbol);
-  }
+  const mission = executive?.briefing;
+  const portfolio = executive?.mission_control?.portfolio;
+  const health = executive?.health;
+  const recommendation = executive?.mission_control?.recommendation;
+  const opsHealthy = operations?.system_status === "HEALTHY";
+  const readyForPaper = readiness?.paper_trading_ready;
 
   return (
-    <div className="terminal-shell">
-      <Sidebar />
+    <main className="kyle-page">
+      <section className="hero">
+        <div>
+          <p className="eyebrow">Kyle</p>
+          <h1>
+            <StatusDot ok={opsHealthy} />
+            {mission?.status || "Loading"}
+          </h1>
+          <p className="subline">
+            {readyForPaper ? "Ready for Paper Trading" : "Not Ready"}
+          </p>
+        </div>
 
-      <main className="terminal-main">
-        <Header selectedSymbol={selectedSymbol} />
+        <button className="danger-button">Emergency Stop</button>
+      </section>
 
-        <SummaryCards portfolio={portfolioLive} />
-
-        <DailyPlanPanel onSelect={handleSelectSymbol} />
-
-        <section className="terminal-workspace">
-          <section className="chart-column">
-            <TradingChart
-              symbol={selectedSymbol}
-              symbols={Object.keys(prices)}
-              prices={prices}
-              onSymbolChange={handleSelectSymbol}
-            />
-
-            <PositionsTable positions={portfolioLive?.positions || []} />
-
-          <PerformancePanel />
-
-          <EquityCurvePanel />
-
-          <AutopilotPanel />
-
-          <RiskGovernorPanel />
-
-          <AutoExitPanel />
-
-          </section>
-
-          <aside className="right-rail">
-            <Watchlist
-              prices={prices}
-              selectedSymbol={selectedSymbol}
-              onSelect={handleSelectSymbol}
-              onBuy={buy}
-            />
-
-            <NotificationsPanel />
-
-            <MarketScannerPanel onSelect={handleSelectSymbol} />
-
-            <PortfolioHealthPanel />
-
-            <ExecutionQueuePanel />
-
-            <ActivityFeedPanel />
-
-            <PortfolioCoachPanel onSelect={handleSelectSymbol} />
-
-            <TradeAdvicePanel symbol={selectedSymbol} />
-
-            <AIAssistantPanel symbol={selectedSymbol} />
-
-            <OrderTicket
-              prices={prices}
-              selectedSymbol={selectedSymbol}
-              onSymbolChange={handleSelectSymbol}
-              onBuy={buy}
-            />
-
-            <BacktesterPanel selectedSymbol={selectedSymbol} />
-
-            <TradeHistoryPanel />
-
-            <TradeTimeline trades={trades} />
-          </aside>
+      <section className="grid">
+        <section className="panel">
+          <h2>Mission</h2>
+          <div className="row">
+            <span>Priority</span>
+            <strong>{mission?.headline || "Loading..."}</strong>
+          </div>
+          <div className="row">
+            <span>Mode</span>
+            <strong>{mission?.mode || "—"}</strong>
+          </div>
+          <div className="row">
+            <span>Autopilot</span>
+            <strong>{mission?.autopilot || "—"}</strong>
+          </div>
+          <p className="note">{mission?.briefing || "Kyle is loading mission data."}</p>
         </section>
-      </main>
-    </div>
+
+        <section className="panel">
+          <h2>Portfolio</h2>
+          <div className="metric">
+            <span>Cash</span>
+            <strong>{formatMoney(portfolio?.cash)}</strong>
+          </div>
+          <div className="metric">
+            <span>Equity</span>
+            <strong>{formatMoney(portfolio?.equity)}</strong>
+          </div>
+          <div className="row">
+            <span>Exposure</span>
+            <strong>{portfolio?.exposure_pct ?? 0}%</strong>
+          </div>
+          <div className="row">
+            <span>Positions</span>
+            <strong>{portfolio?.open_positions ?? 0}</strong>
+          </div>
+        </section>
+
+        <section className="panel">
+          <h2>Recommendation</h2>
+          <h3>{recommendation?.action || "No action required"}</h3>
+          <p className="note">
+            {recommendation?.message || "Kyle is monitoring the market."}
+          </p>
+        </section>
+
+        <section className="panel">
+          <h2>System</h2>
+          <div className="row">
+            <span>Health</span>
+            <strong>{operations?.system_status || "Loading"}</strong>
+          </div>
+          <div className="row">
+            <span>Broker</span>
+            <strong>
+              {operations?.broker?.connected ? "Connected" : "Disconnected"}
+            </strong>
+          </div>
+          <div className="row">
+            <span>Burn-In</span>
+            <strong>{burnIn?.running ? "Running" : "Stopped"}</strong>
+          </div>
+          <div className="row">
+            <span>Readiness</span>
+            <strong>{readiness?.overall_status || "—"}</strong>
+          </div>
+        </section>
+      </section>
+
+      <section className="panel timeline">
+        <h2>Timeline</h2>
+
+        {timeline.length === 0 ? (
+          <p className="note">No recent timeline events. Kyle is monitoring.</p>
+        ) : (
+          timeline.slice(0, 6).map((item, index) => (
+            <div className="timeline-item" key={index}>
+              <span>{item.time || item.generated || "—"}</span>
+              <p>{item.message || item.type || JSON.stringify(item)}</p>
+            </div>
+          ))
+        )}
+      </section>
+
+      <footer>
+       Trading Performance: {health?.grade || "—"} / {health?.status || "—"}
+      </footer>
+    </main>
   );
 }
