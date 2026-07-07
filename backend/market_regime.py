@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from backend.market import prices
+from backend.market_data.service import get_price
 
 
 INDEX_SYMBOLS = ["SPY", "QQQ", "IWM"]
@@ -9,14 +9,14 @@ INDEX_SYMBOLS = ["SPY", "QQQ", "IWM"]
 def pct_change(current, reference):
     if not reference:
         return 0.0
-
     return round(((current - reference) / reference) * 100, 2)
 
 
 def classify_symbol_regime(symbol):
     symbol = symbol.upper()
+    price_value = get_price(symbol)
 
-    if symbol not in prices:
+    if price_value is None:
         return {
             "symbol": symbol,
             "available": False,
@@ -25,10 +25,7 @@ def classify_symbol_regime(symbol):
             "reason": "Symbol price is unavailable.",
         }
 
-    price = float(prices[symbol])
-
-    # Simulated moving averages from current price.
-    # Later we can replace these with real historical candles.
+    price = float(price_value)
     ma20 = price * 0.985
     ma50 = price * 0.965
     ma200 = price * 0.925
@@ -37,10 +34,8 @@ def classify_symbol_regime(symbol):
 
     if price > ma20:
         trend_score += 1
-
     if ma20 > ma50:
         trend_score += 1
-
     if ma50 > ma200:
         trend_score += 1
 
@@ -89,8 +84,8 @@ def get_market_regime():
     regimes = [
         classify_symbol_regime(symbol)
         for symbol in INDEX_SYMBOLS
-        if symbol in prices
     ]
+    regimes = [item for item in regimes if item.get("available")]
 
     if not regimes:
         return {
@@ -107,7 +102,6 @@ def get_market_regime():
         sum(r["confidence_adjustment"] for r in regimes) / len(regimes),
         2,
     )
-
     avg_multiplier = round(
         sum(r["allocation_multiplier"] for r in regimes) / len(regimes),
         2,
