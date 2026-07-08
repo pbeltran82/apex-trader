@@ -1,12 +1,14 @@
 from datetime import datetime
 
 from backend.health_monitor import build_health_monitor
+from backend.persistence_health import build_persistence_health
 from backend.system_validation import run_system_validation
 
 
 def build_readiness_report():
     validation = run_system_validation()
     health = build_health_monitor()
+    persistence = build_persistence_health()
 
     checks = health.get("checks", {})
     broker = health.get("broker", {})
@@ -22,6 +24,12 @@ def build_readiness_report():
 
     if not market_data.get("validated", False):
         blocking.append("Market data is not validated.")
+
+    if not persistence.get("connected", False):
+        blocking.append("Database persistence is unavailable.")
+
+    if not persistence.get("order_persistence_ready", False):
+        blocking.append("Order persistence not implemented.")
 
     if not checks.get("portfolio_reconciled"):
         blocking.append("Portfolio reconciliation failed.")
@@ -43,7 +51,6 @@ def build_readiness_report():
         blocking.extend(
             [
                 "Real broker integration incomplete.",
-                "Order persistence not implemented.",
                 "Continuous burn-in not completed.",
             ]
         )
@@ -63,5 +70,6 @@ def build_readiness_report():
         "overall_status": overall_status,
         "validation": validation,
         "health": health,
+        "persistence": persistence,
         "blocking_items": blocking,
     }
