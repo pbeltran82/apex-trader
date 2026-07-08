@@ -1,17 +1,20 @@
 from datetime import datetime
 
 from backend.broker_health import status as broker_status
+from backend.market_data.service import health_status as market_data_health_status
 from backend.risk_engine import build_risk_engine
 from backend.reconciliation import reconcile_positions
 
 
 def build_health_monitor():
     broker = broker_status()
+    market_data = market_data_health_status()
     risk = build_risk_engine()
     reconciliation = reconcile_positions()
 
     checks = {
         "broker_connected": broker["connected"],
+        "market_data_connected": market_data["connected"],
         "trading_allowed": risk["trading_allowed"],
         "portfolio_reconciled": reconciliation["healthy"],
     }
@@ -26,6 +29,7 @@ def build_health_monitor():
         "health_score": f"{passed}/{total}",
         "checks": checks,
         "broker": broker,
+        "market_data": market_data,
         "risk": risk,
         "reconciliation": reconciliation,
     }
