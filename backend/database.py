@@ -65,7 +65,10 @@ def initialize_database():
     )
     """)
 
-    columns = [row["name"] for row in cur.execute("PRAGMA table_info(execution_queue)")]
+    execution_columns = [
+        row["name"]
+        for row in cur.execute("PRAGMA table_info(execution_queue)")
+    ]
 
     for name, ddl in {
         "symbol": "ALTER TABLE execution_queue ADD COLUMN symbol TEXT",
@@ -74,7 +77,27 @@ def initialize_database():
         "created": "ALTER TABLE execution_queue ADD COLUMN created TEXT",
         "last_updated": "ALTER TABLE execution_queue ADD COLUMN last_updated TEXT",
     }.items():
-        if name not in columns:
+        if name not in execution_columns:
+            cur.execute(ddl)
+
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS burn_in_state (
+        id INTEGER PRIMARY KEY,
+        payload TEXT,
+        updated TEXT
+    )
+    """)
+
+    burn_in_columns = [
+        row["name"]
+        for row in cur.execute("PRAGMA table_info(burn_in_state)")
+    ]
+
+    for name, ddl in {
+        "payload": "ALTER TABLE burn_in_state ADD COLUMN payload TEXT",
+        "updated": "ALTER TABLE burn_in_state ADD COLUMN updated TEXT",
+    }.items():
+        if name not in burn_in_columns:
             cur.execute(ddl)
 
     conn.commit()
