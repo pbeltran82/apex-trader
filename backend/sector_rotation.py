@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from backend.market import prices
+from backend.market_data.service import get_price
 
 
 SECTOR_MAP = {
@@ -14,7 +14,14 @@ SECTOR_MAP = {
 
 
 def classify_sector(sector, symbols):
-    available = [s for s in symbols if s in prices]
+    symbol_prices = {}
+
+    for symbol in symbols:
+        price = get_price(symbol)
+        if price is not None:
+            symbol_prices[symbol] = float(price)
+
+    available = list(symbol_prices.keys())
 
     if not available:
         return {
@@ -27,10 +34,9 @@ def classify_sector(sector, symbols):
             "reason": "No symbols available for this sector.",
         }
 
-    sector_prices = [float(prices[s]) for s in available]
+    sector_prices = list(symbol_prices.values())
     avg_price = sum(sector_prices) / len(sector_prices)
 
-    # Simulated sector strength from current universe.
     strength_score = 0
 
     if avg_price > 100:
