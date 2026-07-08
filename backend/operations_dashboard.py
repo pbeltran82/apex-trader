@@ -8,14 +8,11 @@ from backend.execution_engine import execution_queue
 
 
 def build_operations_dashboard():
-
     broker = broker_status()
-
     risk = build_risk_engine()
-
     reconciliation = reconcile_positions()
-
     health = build_health_monitor()
+    market_data = health.get("market_data", {})
 
     queued = len(execution_queue)
 
@@ -50,51 +47,45 @@ def build_operations_dashboard():
     )
 
     return {
-
         "generated": datetime.utcnow().isoformat(),
-
-        "system_status":
-            "HEALTHY" if health["healthy"] else "ATTENTION",
-
+        "system_status": "HEALTHY" if health["healthy"] else "ATTENTION",
+        "mode": {
+            "market_data_provider": market_data.get("provider"),
+            "broker_provider": broker.get("provider"),
+            "live_data_paper_execution": (
+                market_data.get("provider") == "ALPACA"
+                and broker.get("provider") == "SIMULATION"
+            ),
+        },
         "broker": broker,
-
+        "market_data": {
+            "connected": market_data.get("connected"),
+            "provider": market_data.get("provider"),
+            "configured_provider": market_data.get("configured_provider"),
+            "validated": market_data.get("validated"),
+            "market_open": market_data.get("market_open"),
+            "market_status": market_data.get("market_status"),
+            "sample_symbol": market_data.get("sample_symbol"),
+            "sample_price": market_data.get("sample_price"),
+            "fallback_active": market_data.get("fallback_active"),
+            "fallback_error": market_data.get("fallback_error"),
+        },
         "risk": {
-
-            "trading_allowed":
-                risk["trading_allowed"],
-
-            "reasons":
-                risk["reasons"],
-
+            "trading_allowed": risk["trading_allowed"],
+            "reasons": risk["reasons"],
         },
-
         "reconciliation": {
-
-            "healthy":
-                reconciliation["healthy"],
-
-            "differences":
-                reconciliation["differences"],
-
+            "healthy": reconciliation["healthy"],
+            "differences": reconciliation["differences"],
         },
-
         "queue": {
-
             "total": queued,
-
             "waiting": waiting,
-
             "checking": checking,
-
             "executing": executing,
-
             "filled": filled,
-
             "rejected": rejected,
-
             "errors": errors,
-
         },
-
         "health": health,
     }
