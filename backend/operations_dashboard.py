@@ -2,6 +2,7 @@ from datetime import datetime
 
 from backend.health_monitor import build_health_monitor
 from backend.broker_health import status as broker_status
+from backend.persistence_health import build_persistence_health
 from backend.risk_engine import build_risk_engine
 from backend.reconciliation import reconcile_positions
 from backend.execution_engine import execution_queue
@@ -12,6 +13,7 @@ def build_operations_dashboard():
     risk = build_risk_engine()
     reconciliation = reconcile_positions()
     health = build_health_monitor()
+    persistence = build_persistence_health()
     market_data = health.get("market_data", {})
 
     queued = len(execution_queue)
@@ -48,7 +50,7 @@ def build_operations_dashboard():
 
     return {
         "generated": datetime.utcnow().isoformat(),
-        "system_status": "HEALTHY" if health["healthy"] else "ATTENTION",
+        "system_status": "HEALTHY" if health["healthy"] and persistence["connected"] else "ATTENTION",
         "mode": {
             "market_data_provider": market_data.get("provider"),
             "broker_provider": broker.get("provider"),
@@ -69,6 +71,14 @@ def build_operations_dashboard():
             "sample_price": market_data.get("sample_price"),
             "fallback_active": market_data.get("fallback_active"),
             "fallback_error": market_data.get("fallback_error"),
+        },
+        "persistence": {
+            "connected": persistence.get("connected"),
+            "database": persistence.get("database"),
+            "order_persistence_ready": persistence.get("order_persistence_ready"),
+            "execution_queue_count": persistence.get("execution_queue_count"),
+            "tables": persistence.get("tables"),
+            "error": persistence.get("error"),
         },
         "risk": {
             "trading_allowed": risk["trading_allowed"],
