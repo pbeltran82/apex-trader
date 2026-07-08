@@ -1,8 +1,10 @@
+import json
 import os
 import threading
 import time
 from datetime import datetime
 
+from backend.database import get_connection
 from backend.readiness_report import build_readiness_report
 
 INTERVAL_SECONDS = int(os.getenv("BURN_IN_INTERVAL_SECONDS", "60"))
@@ -33,6 +35,72 @@ _state = {
 }
 
 
+def _ensure_burn_in_schema():
+    conn = get_connection()
+    cur = conn.cursor()
+
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS burn_in_state (
+        id INTEGER PRIMARY KEY,
+        payload TEXT,
+        updated TEXT
+    )
+    """)
+
+    conn.commit()
+    conn.close()
+
+
+def _persist_state():
+    _ensure_burn_in_schema()
+
+    payload = json.dumps(_state, default=str)
+
+    conn = get_connection()
+    cur = conn.cursor()
+
+    cur.execute(
+        """
+        INSERT INTO burn_in_state (id, payload, updated)
+        VALUES (1, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+            payload = excluded.payload,
+            updated = excluded.updated
+        """,
+        (payload, datetime.utcnow().isoformat()),
+    )
+
+    conn.commit()
+    conn.close()
+
+
+def _load_state():
+    _ensure_burn_in_schema()
+
+    conn = get_connection()
+    row = conn.execute(
+        "SELECT payload FROM burn_in_state WHERE id = 1"
+    ).fetchone()
+    conn.close()
+
+    if not row or not row["payload"]:
+        return
+
+    try:
+        stored = json.loads(row["payload"])
+    except Exception:
+        return
+
+    for key in _state.keys():
+        if key in stored:
+            _state[key] = stored[key]
+
+    _state["running"] = False
+    _state["stopped_at"] = _state.get("stopped_at")
+    _state["required_checks"] = REQUIRED_CHECKS
+    _state["interval_seconds"] = INTERVAL_SECONDS
+
+
 def start_burn_in():
     global _thread, _running
 
@@ -41,9 +109,13 @@ def start_burn_in():
 
     _running = True
     _state["running"] = True
-    _state["started_at"] = datetime.utcnow().isoformat()
+
+    if not _state.get("started_at"):
+        _state["started_at"] = datetime.utcnow().isoformat()
+
     _state["stopped_at"] = None
     _state["last_error"] = None
+    _persist_state()
 
     _thread = threading.Thread(target=_loop, daemon=True)
     _thread.start()
@@ -57,6 +129,7 @@ def stop_burn_in():
     _running = False
     _state["running"] = False
     _state["stopped_at"] = datetime.utcnow().isoformat()
+    _persist_state()
 
     return status()
 
@@ -73,6 +146,7 @@ def reset_burn_in():
         "checks": 0,
         "failures": 0,
         "passed_checks": 0,
+        "required_checks": REQUIRED_CHECKS,
         "completed": False,
         "completed_at": None,
         "last_check": None,
@@ -83,7 +157,10 @@ def reset_burn_in():
         "last_market_data_validated": None,
         "last_market_data_market_open": None,
         "last_market_data_sample_price": None,
+        "interval_seconds": INTERVAL_SECONDS,
     })
+
+    _persist_state()
 
     return status()
 
@@ -95,6 +172,7 @@ def _loop():
         except Exception as e:
             _state["failures"] += 1
             _state["last_error"] = str(e)
+            _persist_state()
 
         time.sleep(INTERVAL_SECONDS)
 
@@ -154,6 +232,7 @@ def run_burn_in_check():
             _state["last_error"] = "Readiness report is not ready for paper trading."
 
     _mark_completion_if_ready()
+    _persist_state()
 
     return {
         "passed": passed,
@@ -176,3 +255,6 @@ def status():
         "remaining_checks": max(REQUIRED_CHECKS - _state["passed_checks"], 0),
         "thread_alive": _thread.is_alive() if _thread else False,
     }
+
+
+_load_state()
