@@ -11,10 +11,15 @@ def run_system_validation():
     operations = build_operations_dashboard()
     risk = build_risk_engine()
     reconciliation = reconcile_positions()
+    market_data = health.get("market_data", {})
 
     checks = {
         "health_monitor": health["healthy"],
         "operations_dashboard": operations["system_status"] == "HEALTHY",
+        "market_data": (
+            market_data.get("connected", False)
+            and market_data.get("validated", False)
+        ),
         "risk_engine": risk["trading_allowed"],
         "reconciliation": reconciliation["healthy"],
     }
