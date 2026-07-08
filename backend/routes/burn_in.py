@@ -3,6 +3,7 @@ from fastapi import APIRouter
 from backend.burn_in import (
     start_burn_in,
     stop_burn_in,
+    reset_burn_in,
     run_burn_in_check,
     status,
 )
@@ -28,3 +29,8 @@ def check():
 @router.post("/burn-in/stop")
 def stop():
     return stop_burn_in()
+
+
+@router.post("/burn-in/reset")
+def reset():
+    return reset_burn_in()
