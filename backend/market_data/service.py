@@ -1,4 +1,5 @@
 import os
+from datetime import datetime
 
 from backend.market_data.cache import cache
 from backend.market_data.simulation_provider import SimulationMarketDataProvider
@@ -48,6 +49,52 @@ def provider_status():
         "fallback_error": _last_error,
         "market": market_status,
     }
+
+
+def health_status(sample_symbol="AAPL"):
+    generated = datetime.utcnow().isoformat()
+    provider = _load_provider()
+    configured = os.getenv("MARKET_DATA_PROVIDER", "simulation")
+    fallback_active = _last_error is not None
+
+    try:
+        market_status = provider.get_market_status()
+        quote = provider.get_quote(sample_symbol)
+        price = quote.get("price")
+
+        connected = price is not None and quote.get("available", True)
+        validated = quote.get("validated", provider.name == "SIMULATION")
+
+        return {
+            "generated": generated,
+            "connected": bool(connected),
+            "provider": provider.name,
+            "configured_provider": configured,
+            "fallback_active": fallback_active,
+            "fallback_error": _last_error,
+            "sample_symbol": sample_symbol.upper(),
+            "sample_price": price,
+            "validated": bool(validated),
+            "market_open": market_status.get("market_open"),
+            "market_status": market_status.get("status"),
+            "quote": quote,
+        }
+
+    except Exception as error:
+        return {
+            "generated": generated,
+            "connected": False,
+            "provider": provider.name,
+            "configured_provider": configured,
+            "fallback_active": fallback_active,
+            "fallback_error": _last_error,
+            "sample_symbol": sample_symbol.upper(),
+            "sample_price": None,
+            "validated": False,
+            "market_open": None,
+            "market_status": "ERROR",
+            "error": str(error),
+        }
 
 
 def get_watchlist():
