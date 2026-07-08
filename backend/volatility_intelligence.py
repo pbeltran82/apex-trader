@@ -1,4 +1,4 @@
-from backend import market
+from backend.market_data.service import get_candles, get_price
 
 
 def calculate_atr(candles, period=14):
@@ -29,21 +29,7 @@ def calculate_atr(candles, period=14):
 
 
 def get_symbol_candles(symbol):
-    symbol = symbol.upper()
-
-    candles = getattr(market, "candles", None)
-    if isinstance(candles, dict):
-        return candles.get(symbol)
-
-    historical_prices = getattr(market, "historical_prices", None)
-    if isinstance(historical_prices, dict):
-        return historical_prices.get(symbol)
-
-    price_history = getattr(market, "price_history", None)
-    if isinstance(price_history, dict):
-        return price_history.get(symbol)
-
-    return None
+    return get_candles(symbol.upper(), limit=120)
 
 
 def classify_atr_volatility(symbol, price, atr):
@@ -115,9 +101,9 @@ def classify_proxy_volatility(symbol, price):
 
 def analyze_volatility(symbol):
     symbol = symbol.upper()
-    prices = getattr(market, "prices", {})
+    price_value = get_price(symbol)
 
-    if symbol not in prices:
+    if price_value is None:
         return {
             "symbol": symbol,
             "available": False,
@@ -129,7 +115,7 @@ def analyze_volatility(symbol):
             "reason": "No price data available for volatility analysis.",
         }
 
-    price = float(prices[symbol])
+    price = float(price_value)
     candles = get_symbol_candles(symbol)
     atr = calculate_atr(candles)
 
