@@ -24,6 +24,7 @@ def run_system_validation():
         ),
         "persistence": persistence["connected"],
         "order_persistence": persistence["order_persistence_ready"],
+        "burn_in_persistence": persistence.get("burn_in_persistence_ready", False),
         "risk_engine": risk["trading_allowed"],
         "reconciliation": reconciliation["healthy"],
     }
