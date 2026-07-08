@@ -5,7 +5,7 @@ import time
 from datetime import datetime
 
 from backend.database import get_connection
-from backend.readiness_report import build_readiness_report
+from backend.health_monitor import build_health_monitor
 
 INTERVAL_SECONDS = int(os.getenv("BURN_IN_INTERVAL_SECONDS", "60"))
 REQUIRED_CHECKS = int(os.getenv("BURN_IN_REQUIRED_CHECKS", "390"))
@@ -96,7 +96,6 @@ def _load_state():
             _state[key] = stored[key]
 
     _state["running"] = False
-    _state["stopped_at"] = _state.get("stopped_at")
     _state["required_checks"] = REQUIRED_CHECKS
     _state["interval_seconds"] = INTERVAL_SECONDS
 
@@ -177,8 +176,8 @@ def _loop():
         time.sleep(INTERVAL_SECONDS)
 
 
-def _record_market_data(report):
-    market_data = report.get("health", {}).get("market_data", {})
+def _record_market_data(health):
+    market_data = health.get("market_data", {})
 
     _state["last_market_data_provider"] = market_data.get("provider")
     _state["last_market_data_connected"] = market_data.get("connected")
@@ -203,18 +202,18 @@ def _mark_completion_if_ready():
 
 
 def run_burn_in_check():
-    report = build_readiness_report()
-    market_data = _record_market_data(report)
+    health = build_health_monitor()
+    market_data = _record_market_data(health)
 
     passed = (
-        report["paper_trading_ready"]
+        health.get("healthy", False)
         and market_data.get("connected", False)
         and market_data.get("validated", False)
     )
 
     _state["checks"] += 1
     _state["last_check"] = datetime.utcnow().isoformat()
-    _state["last_status"] = report["overall_status"]
+    _state["last_status"] = "LIVE_DATA_PAPER_READY" if passed else "NOT_READY"
     _state["last_error"] = None
 
     if passed:
@@ -228,8 +227,10 @@ def run_burn_in_check():
             _state["last_error"] = "Market data is disconnected."
         elif not market_data.get("validated", False):
             _state["last_error"] = "Market data is not validated."
+        elif not health.get("healthy", False):
+            _state["last_error"] = "Health monitor is not healthy."
         else:
-            _state["last_error"] = "Readiness report is not ready for paper trading."
+            _state["last_error"] = "Burn-in check failed."
 
     _mark_completion_if_ready()
     _persist_state()
@@ -238,7 +239,7 @@ def run_burn_in_check():
         "passed": passed,
         "completed": _state["completed"],
         "market_data": market_data,
-        "report": report,
+        "health": health,
         "burn_in": status(),
     }
 
