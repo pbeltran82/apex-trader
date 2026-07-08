@@ -2,6 +2,7 @@ from datetime import datetime
 
 from backend.health_monitor import build_health_monitor
 from backend.operations_dashboard import build_operations_dashboard
+from backend.persistence_health import build_persistence_health
 from backend.risk_engine import build_risk_engine
 from backend.reconciliation import reconcile_positions
 
@@ -9,6 +10,7 @@ from backend.reconciliation import reconcile_positions
 def run_system_validation():
     health = build_health_monitor()
     operations = build_operations_dashboard()
+    persistence = build_persistence_health()
     risk = build_risk_engine()
     reconciliation = reconcile_positions()
     market_data = health.get("market_data", {})
@@ -20,6 +22,8 @@ def run_system_validation():
             market_data.get("connected", False)
             and market_data.get("validated", False)
         ),
+        "persistence": persistence["connected"],
+        "order_persistence": persistence["order_persistence_ready"],
         "risk_engine": risk["trading_allowed"],
         "reconciliation": reconciliation["healthy"],
     }
@@ -33,4 +37,5 @@ def run_system_validation():
         "total": total,
         "success": passed == total,
         "checks": checks,
+        "persistence": persistence,
     }
