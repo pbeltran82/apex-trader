@@ -1,5 +1,6 @@
 from backend.portfolio import account, positions, trades
-from backend.market import prices, money
+from backend.market import money
+from backend.market_data.service import get_price
 
 
 def build_portfolio_live():
@@ -9,7 +10,11 @@ def build_portfolio_live():
 
     for p in positions:
         symbol = p["symbol"]
-        current_price = prices.get(symbol, p["avg_price"])
+        current_price = get_price(symbol)
+
+        if current_price is None:
+            current_price = p["avg_price"]
+
         value = current_price * p["qty"]
         pnl = (current_price - p["avg_price"]) * p["qty"]
 
