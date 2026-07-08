@@ -76,6 +76,7 @@ from backend.routes.readiness_report import (
     router as readiness_report_router,
 )
 from backend.routes.burn_in import router as burn_in_router
+from backend.routes.persistence_health import router as persistence_health_router
 
 
 app = FastAPI(title="Kyle Trader API")
@@ -149,6 +150,7 @@ app.include_router(
     prefix="/api",
 )
 app.include_router(burn_in_router, prefix="/api")
+app.include_router(persistence_health_router, prefix="/api")
 
 
 @app.get("/")
