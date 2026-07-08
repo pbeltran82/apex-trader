@@ -8,6 +8,7 @@ REQUIRED_TABLES = [
     "positions",
     "trades",
     "execution_queue",
+    "burn_in_state",
 ]
 
 
@@ -18,6 +19,13 @@ REQUIRED_EXECUTION_QUEUE_COLUMNS = [
     "payload",
     "created",
     "last_updated",
+]
+
+
+REQUIRED_BURN_IN_COLUMNS = [
+    "id",
+    "payload",
+    "updated",
 ]
 
 
@@ -42,6 +50,17 @@ def _table_columns(conn, table_name):
     ]
 
 
+def _count_rows(conn, table_name):
+    if not _table_exists(conn, table_name):
+        return 0
+
+    return int(
+        conn.execute(
+            f"SELECT COUNT(*) AS count FROM {table_name}"
+        ).fetchone()["count"]
+    )
+
+
 def build_persistence_health():
     generated = datetime.utcnow().isoformat()
 
@@ -54,19 +73,28 @@ def build_persistence_health():
         }
 
         execution_queue_columns = _table_columns(conn, "execution_queue")
+        burn_in_columns = _table_columns(conn, "burn_in_state")
 
         execution_queue_ready = all(
             column in execution_queue_columns
             for column in REQUIRED_EXECUTION_QUEUE_COLUMNS
         )
 
-        queue_count = conn.execute(
-            "SELECT COUNT(*) AS count FROM execution_queue"
-        ).fetchone()["count"]
+        burn_in_ready = all(
+            column in burn_in_columns
+            for column in REQUIRED_BURN_IN_COLUMNS
+        )
+
+        queue_count = _count_rows(conn, "execution_queue")
+        burn_in_state_count = _count_rows(conn, "burn_in_state")
 
         conn.close()
 
-        connected = all(tables.values()) and execution_queue_ready
+        connected = (
+            all(tables.values())
+            and execution_queue_ready
+            and burn_in_ready
+        )
 
         return {
             "generated": generated,
@@ -75,8 +103,12 @@ def build_persistence_health():
             "tables": tables,
             "execution_queue_ready": execution_queue_ready,
             "execution_queue_columns": execution_queue_columns,
-            "execution_queue_count": int(queue_count),
+            "execution_queue_count": queue_count,
             "order_persistence_ready": execution_queue_ready,
+            "burn_in_ready": burn_in_ready,
+            "burn_in_columns": burn_in_columns,
+            "burn_in_state_count": burn_in_state_count,
+            "burn_in_persistence_ready": burn_in_ready,
             "error": None,
         }
 
@@ -90,5 +122,9 @@ def build_persistence_health():
             "execution_queue_columns": [],
             "execution_queue_count": 0,
             "order_persistence_ready": False,
+            "burn_in_ready": False,
+            "burn_in_columns": [],
+            "burn_in_state_count": 0,
+            "burn_in_persistence_ready": False,
             "error": str(error),
         }
