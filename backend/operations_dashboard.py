@@ -48,9 +48,16 @@ def build_operations_dashboard():
         if o["status"] == "ERROR"
     )
 
+    system_healthy = (
+        health["healthy"]
+        and persistence["connected"]
+        and persistence.get("order_persistence_ready", False)
+        and persistence.get("burn_in_persistence_ready", False)
+    )
+
     return {
         "generated": datetime.utcnow().isoformat(),
-        "system_status": "HEALTHY" if health["healthy"] and persistence["connected"] else "ATTENTION",
+        "system_status": "HEALTHY" if system_healthy else "ATTENTION",
         "mode": {
             "market_data_provider": market_data.get("provider"),
             "broker_provider": broker.get("provider"),
@@ -77,6 +84,8 @@ def build_operations_dashboard():
             "database": persistence.get("database"),
             "order_persistence_ready": persistence.get("order_persistence_ready"),
             "execution_queue_count": persistence.get("execution_queue_count"),
+            "burn_in_persistence_ready": persistence.get("burn_in_persistence_ready"),
+            "burn_in_state_count": persistence.get("burn_in_state_count"),
             "tables": persistence.get("tables"),
             "error": persistence.get("error"),
         },
