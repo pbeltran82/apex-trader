@@ -1,6 +1,7 @@
 from datetime import datetime
+import json
+from pathlib import Path
 import threading
-import time
 from typing import Dict, List, Optional
 
 from fastapi import FastAPI, HTTPException
@@ -27,6 +28,37 @@ app.add_middleware(
 )
 
 # =========================
+# STORAGE
+# =========================
+DATA_DIR = Path("data")
+STATE_FILE = DATA_DIR / "paper_state.json"
+DECISION_LOG_FILE = DATA_DIR / "decision_log.jsonl"
+
+DEFAULT_ACCOUNT = {
+    "balance": 10000.0,
+    "equity": 10000.0,
+    "buying_power": 10000.0,
+    "currency": "USD",
+    "mode": "paper",
+}
+DEFAULT_PRICES = {
+    "AAPL": 190.12,
+    "TSLA": 245.55,
+    "NVDA": 455.10,
+    "MSFT": 430.25,
+    "AMZN": 185.40,
+}
+DEFAULT_WATCHLIST = ["AAPL", "TSLA", "NVDA", "MSFT", "AMZN"]
+DEFAULT_CONFIG = {
+    "interval_seconds": 60,
+    "max_position_value": 1500.0,
+    "max_open_positions": 3,
+    "min_confidence": 70,
+    "stop_loss_pct": 0.03,
+    "take_profit_pct": 0.06,
+}
+
+# =========================
 # REQUEST MODELS
 # =========================
 class PriceUpdate(BaseModel):
@@ -51,42 +83,20 @@ class ManualExitRequest(BaseModel):
 # =========================
 # PAPER TRADING STATE
 # =========================
-account = {
-    "balance": 10000.0,
-    "equity": 10000.0,
-    "buying_power": 10000.0,
-    "currency": "USD",
-    "mode": "paper",
-}
-
+account = dict(DEFAULT_ACCOUNT)
 positions: List[Dict] = []
 trades: List[Dict] = []
 equity_curve = [{"timestamp": datetime.utcnow().isoformat(), "equity": 10000.0}]
-prices = {
-    "AAPL": 190.12,
-    "TSLA": 245.55,
-    "NVDA": 455.10,
-    "MSFT": 430.25,
-    "AMZN": 185.40,
-}
-watchlist = ["AAPL", "TSLA", "NVDA", "MSFT", "AMZN"]
-
-# =========================
-# AUTONOMOUS TRADER CONFIG
-# =========================
-config = {
-    "interval_seconds": 60,
-    "max_position_value": 1500.0,
-    "max_open_positions": 3,
-    "min_confidence": 70,
-    "stop_loss_pct": 0.03,
-    "take_profit_pct": 0.06,
-}
+prices = dict(DEFAULT_PRICES)
+watchlist = list(DEFAULT_WATCHLIST)
+config = dict(DEFAULT_CONFIG)
+decision_log: List[Dict] = []
 
 _autonomous_thread: Optional[threading.Thread] = None
 _autonomous_running = False
 _autonomous_stop_event = threading.Event()
 _autonomous_lock = threading.Lock()
+_persistence_lock = threading.Lock()
 _autonomous_state = {
     "running": False,
     "started_at": None,
@@ -113,6 +123,102 @@ def _normalize_symbol(symbol: str) -> str:
     return symbol.strip().upper()
 
 
+def _ensure_data_dir() -> None:
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def _state_payload() -> Dict:
+    return {
+        "saved_at": _now(),
+        "account": account,
+        "positions": positions,
+        "trades": trades,
+        "equity_curve": equity_curve[-1000:],
+        "prices": prices,
+        "watchlist": watchlist,
+        "config": config,
+        "autonomous_state": _autonomous_state,
+    }
+
+
+def _save_state() -> None:
+    with _persistence_lock:
+        _ensure_data_dir()
+        temp_file = STATE_FILE.with_suffix(".tmp")
+        temp_file.write_text(json.dumps(_state_payload(), indent=2), encoding="utf-8")
+        temp_file.replace(STATE_FILE)
+
+
+def _load_state() -> None:
+    if not STATE_FILE.exists():
+        return
+
+    try:
+        data = json.loads(STATE_FILE.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return
+
+    account.update({**DEFAULT_ACCOUNT, **data.get("account", {})})
+    positions.clear()
+    positions.extend(data.get("positions", []))
+    trades.clear()
+    trades.extend(data.get("trades", []))
+    equity_curve.clear()
+    equity_curve.extend(data.get("equity_curve", []))
+    if not equity_curve:
+        equity_curve.append({"timestamp": _now(), "equity": account["equity"]})
+    prices.update({**DEFAULT_PRICES, **data.get("prices", {})})
+    watchlist.clear()
+    watchlist.extend(data.get("watchlist", DEFAULT_WATCHLIST))
+    config.update({**DEFAULT_CONFIG, **data.get("config", {})})
+
+    # Never auto-resume background trading after a restart. Operator must restart it.
+    restored_auto_state = data.get("autonomous_state", {})
+    _autonomous_state.update(restored_auto_state)
+    _autonomous_state.update({
+        "running": False,
+        "stopped_at": _now(),
+        "last_status": "RESTORED",
+        "last_action": "RESTORED_FROM_DISK",
+        "last_reason": "Paper state restored; autonomous loop requires manual restart.",
+    })
+
+
+def _load_decision_log(limit: int = 200) -> None:
+    decision_log.clear()
+    if not DECISION_LOG_FILE.exists():
+        return
+
+    try:
+        lines = DECISION_LOG_FILE.read_text(encoding="utf-8").splitlines()[-limit:]
+    except OSError:
+        return
+
+    for line in lines:
+        try:
+            decision_log.append(json.loads(line))
+        except json.JSONDecodeError:
+            continue
+
+
+def _append_decision(event_type: str, payload: Dict) -> Dict:
+    event = {
+        "id": len(decision_log) + 1,
+        "timestamp": _now(),
+        "event_type": event_type,
+        **payload,
+    }
+    decision_log.append(event)
+    if len(decision_log) > 500:
+        del decision_log[:-500]
+
+    with _persistence_lock:
+        _ensure_data_dir()
+        with DECISION_LOG_FILE.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(event) + "\n")
+    return event
+
+
 def _open_position(symbol: str) -> Optional[Dict]:
     symbol = _normalize_symbol(symbol)
     return next((position for position in positions if position["symbol"] == symbol), None)
@@ -131,14 +237,15 @@ def _refresh_positions() -> None:
         )
 
 
-def _refresh_equity() -> float:
+def _refresh_equity(record: bool = True) -> float:
     _refresh_positions()
     market_value = sum(position["market_value"] for position in positions)
     account["equity"] = round(account["balance"] + market_value, 2)
     account["buying_power"] = round(account["balance"], 2)
-    equity_curve.append({"timestamp": _now(), "equity": account["equity"]})
-    if len(equity_curve) > 1000:
-        del equity_curve[:-1000]
+    if record:
+        equity_curve.append({"timestamp": _now(), "equity": account["equity"]})
+        if len(equity_curve) > 1000:
+            del equity_curve[:-1000]
     return account["equity"]
 
 
@@ -156,6 +263,7 @@ def _record_trade(symbol: str, side: str, qty: int, price: float, reason: str, p
         "mode": "paper",
     }
     trades.append(trade)
+    _append_decision("TRADE_RECORDED", {"trade": trade})
     return trade
 
 
@@ -202,6 +310,7 @@ def _sell_position(symbol: str, reason: str) -> Dict:
     positions.remove(position)
     trade = _record_trade(symbol, "SELL", qty, current_price, reason, pnl)
     _refresh_equity()
+    _save_state()
 
     return {
         "ok": True,
@@ -266,12 +375,13 @@ def _place_paper_buy(candidate: Dict) -> Dict:
     positions.append(position)
     trade = _record_trade(candidate["symbol"], "BUY", qty, price, candidate["reason"])
     _refresh_equity()
+    _save_state()
 
     return {"ok": True, "message": "Paper buy executed.", "position": position, "trade": trade}
 
 
 def performance_summary() -> Dict:
-    _refresh_equity()
+    _refresh_equity(record=False)
     buys = [trade for trade in trades if trade["side"] == "BUY"]
     sells = [trade for trade in trades if trade["side"] == "SELL"]
     realized_pnl = round(sum(trade.get("realized_pnl", 0.0) for trade in sells), 2)
@@ -299,7 +409,7 @@ def performance_summary() -> Dict:
 
 
 def autonomous_status(extra: Optional[Dict] = None) -> Dict:
-    _refresh_equity()
+    _refresh_equity(record=False)
     payload = {
         **_autonomous_state,
         **config,
@@ -308,6 +418,11 @@ def autonomous_status(extra: Optional[Dict] = None) -> Dict:
         "trade_count": len(trades),
         "account": account,
         "performance": performance_summary(),
+        "storage": {
+            "state_file": str(STATE_FILE),
+            "decision_log_file": str(DECISION_LOG_FILE),
+            "decision_log_events_loaded": len(decision_log),
+        },
     }
     if extra:
         payload["details"] = extra
@@ -330,7 +445,14 @@ def run_autonomous_cycle() -> Dict:
                 "last_selected_symbol": None,
                 "last_reason": "Maximum open positions reached.",
             })
-            return autonomous_status(extra={"exit_updates": exit_updates})
+            decision = _append_decision("AUTONOMOUS_CYCLE", {
+                "status": _autonomous_state["last_status"],
+                "action": _autonomous_state["last_action"],
+                "reason": _autonomous_state["last_reason"],
+                "exit_updates": exit_updates,
+            })
+            _save_state()
+            return autonomous_status(extra={"exit_updates": exit_updates, "decision": decision})
 
         candidates = sorted(
             (_score_symbol(symbol) for symbol in watchlist if symbol in prices),
@@ -346,7 +468,15 @@ def run_autonomous_cycle() -> Dict:
                 "last_selected_symbol": None,
                 "last_reason": "No candidate met autonomous confidence threshold.",
             })
-            return autonomous_status(extra={"exit_updates": exit_updates, "candidates": candidates})
+            decision = _append_decision("AUTONOMOUS_CYCLE", {
+                "status": _autonomous_state["last_status"],
+                "action": _autonomous_state["last_action"],
+                "reason": _autonomous_state["last_reason"],
+                "exit_updates": exit_updates,
+                "candidates": candidates,
+            })
+            _save_state()
+            return autonomous_status(extra={"exit_updates": exit_updates, "candidates": candidates, "decision": decision})
 
         order_result = _place_paper_buy(selected)
         _autonomous_state.update({
@@ -355,12 +485,23 @@ def run_autonomous_cycle() -> Dict:
             "last_selected_symbol": selected["symbol"],
             "last_reason": order_result["message"],
         })
+        decision = _append_decision("AUTONOMOUS_CYCLE", {
+            "status": _autonomous_state["last_status"],
+            "action": _autonomous_state["last_action"],
+            "reason": _autonomous_state["last_reason"],
+            "selected": selected,
+            "order_result": order_result,
+            "exit_updates": exit_updates,
+            "candidates": candidates,
+        })
+        _save_state()
 
         return autonomous_status(extra={
             "selected": selected,
             "order_result": order_result,
             "exit_updates": exit_updates,
             "candidates": candidates,
+            "decision": decision,
         })
 
 
@@ -374,10 +515,13 @@ def _autonomous_loop() -> None:
             _autonomous_state["failures"] += 1
             _autonomous_state["last_error"] = str(error)
             _autonomous_state["last_status"] = "ERROR"
+            _append_decision("AUTONOMOUS_ERROR", {"error": str(error)})
+            _save_state()
         _autonomous_stop_event.wait(config["interval_seconds"])
 
     _autonomous_running = False
     _autonomous_state["running"] = False
+    _save_state()
 
 
 def start_autonomous_trader() -> Dict:
@@ -397,6 +541,8 @@ def start_autonomous_trader() -> Dict:
         "last_action": "STARTED",
         "last_reason": "Autonomous paper trader started.",
     })
+    _append_decision("AUTONOMOUS_STARTED", {"config": config})
+    _save_state()
 
     _autonomous_thread = threading.Thread(target=_autonomous_loop, daemon=True)
     _autonomous_thread.start()
@@ -418,6 +564,8 @@ def stop_autonomous_trader() -> Dict:
         "last_action": "STOPPED",
         "last_reason": "Autonomous paper trader stopped.",
     })
+    _append_decision("AUTONOMOUS_STOPPED", {"status": _autonomous_state})
+    _save_state()
     return autonomous_status()
 
 
@@ -426,13 +574,8 @@ def reset_autonomous_trader() -> Dict:
     positions.clear()
     trades.clear()
     equity_curve.clear()
-    account.update({
-        "balance": 10000.0,
-        "equity": 10000.0,
-        "buying_power": 10000.0,
-        "currency": "USD",
-        "mode": "paper",
-    })
+    account.clear()
+    account.update(DEFAULT_ACCOUNT)
     equity_curve.append({"timestamp": _now(), "equity": account["equity"]})
 
     _autonomous_state.update({
@@ -448,6 +591,8 @@ def reset_autonomous_trader() -> Dict:
         "last_action": "RESET",
         "last_reason": "Autonomous paper trader reset.",
     })
+    _append_decision("AUTONOMOUS_RESET", {"account": account})
+    _save_state()
     return autonomous_status()
 
 
@@ -459,15 +604,24 @@ def mission_control() -> Dict:
         "account": account,
         "positions": get_positions(),
         "recent_trades": trades[-10:],
+        "recent_decisions": decision_log[-10:],
         "prices": prices,
         "watchlist": watchlist,
         "performance": performance_summary(),
         "operator_notes": [
             "Paper trading only.",
+            "Paper state persists to data/paper_state.json.",
+            "Decision history appends to data/decision_log.jsonl.",
             "Autonomous loop respects max open positions and per-position notional cap.",
             "Use /api/autonomous-trader/stop before changing strategy settings.",
         ],
     }
+
+
+# Load persisted paper state after function definitions are available.
+_load_state()
+_load_decision_log()
+_refresh_equity(record=False)
 
 
 # =========================
@@ -480,7 +634,7 @@ def root():
 
 @app.get("/api/account")
 def get_account():
-    _refresh_equity()
+    _refresh_equity(record=False)
     return account
 
 
@@ -498,6 +652,7 @@ def get_trades():
 @app.get("/api/equity")
 def get_equity():
     _refresh_equity()
+    _save_state()
     return equity_curve
 
 
@@ -512,9 +667,15 @@ def update_price(payload: PriceUpdate):
     prices[symbol] = round(payload.price, 2)
     if symbol not in watchlist:
         watchlist.append(symbol)
-    _manage_positions()
+    exit_updates = _manage_positions()
     _refresh_equity()
-    return {"ok": True, "symbol": symbol, "price": prices[symbol], "account": account}
+    event = _append_decision("PRICE_UPDATED", {
+        "symbol": symbol,
+        "price": prices[symbol],
+        "exit_updates": exit_updates,
+    })
+    _save_state()
+    return {"ok": True, "symbol": symbol, "price": prices[symbol], "account": account, "event": event}
 
 
 @app.get("/api/watchlist")
@@ -530,6 +691,24 @@ def get_performance():
 @app.get("/api/mission-control")
 def get_mission_control():
     return mission_control()
+
+
+@app.get("/api/decisions")
+def get_decisions(limit: int = 50):
+    limit = max(1, min(limit, 500))
+    return decision_log[-limit:]
+
+
+@app.get("/api/storage")
+def get_storage_status():
+    return {
+        "state_file": str(STATE_FILE),
+        "state_file_exists": STATE_FILE.exists(),
+        "decision_log_file": str(DECISION_LOG_FILE),
+        "decision_log_file_exists": DECISION_LOG_FILE.exists(),
+        "decision_log_events_loaded": len(decision_log),
+        "state_snapshot": _state_payload(),
+    }
 
 
 # =========================
@@ -559,6 +738,7 @@ def autonomous_trader_summary():
         "trade_count": status["trade_count"],
         "equity": status["account"]["equity"],
         "performance": status["performance"],
+        "storage": status["storage"],
     }
 
 
@@ -602,7 +782,9 @@ def update_autonomous_config(payload: ConfigUpdate):
 
     _autonomous_state["last_action"] = "CONFIG_UPDATED"
     _autonomous_state["last_reason"] = "Autonomous trader config updated."
-    return {"ok": True, "config": config, "status": autonomous_status()}
+    event = _append_decision("CONFIG_UPDATED", {"updates": updates, "config": config})
+    _save_state()
+    return {"ok": True, "config": config, "event": event, "status": autonomous_status()}
 
 
 @app.post("/api/autonomous-trader/exit")
@@ -612,6 +794,8 @@ def manual_exit(payload: ManualExitRequest):
         raise HTTPException(status_code=404, detail=result["message"])
     _autonomous_state["last_action"] = "MANUAL_EXIT"
     _autonomous_state["last_reason"] = result["message"]
+    _append_decision("MANUAL_EXIT", {"result": result})
+    _save_state()
     return {"ok": True, "result": result, "status": autonomous_status()}
 
 
@@ -622,4 +806,6 @@ def liquidate_all_paper_positions():
         results.append(_sell_position(position["symbol"], "Manual paper liquidation."))
     _autonomous_state["last_action"] = "LIQUIDATED"
     _autonomous_state["last_reason"] = "All paper positions liquidated."
-    return {"ok": True, "results": results, "status": autonomous_status()}
+    event = _append_decision("LIQUIDATED", {"results": results})
+    _save_state()
+    return {"ok": True, "results": results, "event": event, "status": autonomous_status()}
