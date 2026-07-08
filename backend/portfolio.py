@@ -1,7 +1,8 @@
 from datetime import datetime
 
 from backend.database import get_connection
-from backend.market import prices, money
+from backend.market import money
+from backend.market_data.service import get_price
 from backend.trade_intelligence import record_trade_intelligence
 
 STARTING_BALANCE = 10000.0
@@ -176,8 +177,10 @@ def calc_equity():
     position_value = 0.0
 
     for p in positions:
-        if p["symbol"] in prices:
-            position_value += prices[p["symbol"]] * p["qty"]
+        price = get_price(p["symbol"])
+
+        if price is not None:
+            position_value += price * p["qty"]
 
     return money(account["balance"] + position_value)
 
@@ -186,7 +189,11 @@ def get_enriched_positions():
     enriched = []
 
     for p in positions:
-        price = prices[p["symbol"]]
+        price = get_price(p["symbol"])
+
+        if price is None:
+            continue
+
         enriched.append({
             **p,
             "current_price": money(price),
@@ -214,10 +221,11 @@ def buy_symbol(
     if qty <= 0:
         return {"error": "Quantity must be greater than zero"}
 
-    if symbol not in prices:
+    price = get_price(symbol)
+
+    if price is None:
         return {"error": "Unknown symbol"}
 
-    price = prices[symbol]
     total_cost = money(price * qty)
 
     if account["balance"] < total_cost:
@@ -279,7 +287,9 @@ def buy_symbol(
 def sell_symbol(symbol, qty=None, exit_reason="Manual Exit"):
     symbol = symbol.upper()
 
-    if symbol not in prices:
+    price = get_price(symbol)
+
+    if price is None:
         return {"error": "Unknown symbol"}
 
     position = next((p for p in positions if p["symbol"] == symbol), None)
@@ -298,7 +308,6 @@ def sell_symbol(symbol, qty=None, exit_reason="Manual Exit"):
     if qty > position["qty"]:
         return {"error": "Not enough shares to sell"}
 
-    price = prices[symbol]
     entry_price = position["avg_price"]
     total = money(price * qty)
     realized_pnl = money((price - entry_price) * qty)
