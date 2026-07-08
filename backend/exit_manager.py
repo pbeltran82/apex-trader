@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from backend.market import prices
+from backend.market_data.service import get_price
 from backend.portfolio import positions, sell_symbol, _save_position
 
 
@@ -33,11 +33,10 @@ def evaluate_position(position):
     initialize_position(position)
 
     symbol = position["symbol"]
+    current_price = get_price(symbol)
 
-    if symbol not in prices:
+    if current_price is None:
         return None
-
-    current_price = prices[symbol]
 
     if current_price > position["highest_price"]:
         position["highest_price"] = current_price
