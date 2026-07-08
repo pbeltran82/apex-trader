@@ -11,8 +11,27 @@ function formatMoney(value) {
   });
 }
 
+function formatPct(value) {
+  const number = Number(value || 0) * 100;
+  return `${number.toFixed(2)}%`;
+}
+
 function StatusDot({ ok }) {
   return <span className={ok ? "dot green" : "dot red"} />;
+}
+
+function RiskCheck({ check }) {
+  return (
+    <div className="risk-check">
+      <div>
+        <strong>{check.name.replaceAll("_", " ")}</strong>
+        <p>{check.message}</p>
+      </div>
+      <span className={check.passed ? "pill good" : "pill bad"}>
+        {check.passed ? "PASS" : "BLOCK"}
+      </span>
+    </div>
+  );
 }
 
 export default function Dashboard() {
@@ -21,6 +40,8 @@ export default function Dashboard() {
   const [readiness, setReadiness] = useState(null);
   const [burnIn, setBurnIn] = useState(null);
   const [timeline, setTimeline] = useState([]);
+  const [coo, setCoo] = useState(null);
+  const [actionLoading, setActionLoading] = useState(false);
 
   async function loadDashboard() {
     try {
@@ -30,12 +51,14 @@ export default function Dashboard() {
         readinessData,
         burnInData,
         timelineData,
+        cooData,
       ] = await Promise.all([
-        fetch(`${API}/executive-dashboard`).then((r) => r.json()),
-        fetch(`${API}/operations-dashboard`).then((r) => r.json()),
-        fetch(`${API}/readiness-report`).then((r) => r.json()),
-        fetch(`${API}/burn-in`).then((r) => r.json()),
+        fetch(`${API}/executive-dashboard`).then((r) => r.json()).catch(() => null),
+        fetch(`${API}/operations-dashboard`).then((r) => r.json()).catch(() => null),
+        fetch(`${API}/readiness-report`).then((r) => r.json()).catch(() => null),
+        fetch(`${API}/burn-in`).then((r) => r.json()).catch(() => null),
         fetch(`${API}/timeline`).then((r) => r.json()).catch(() => []),
+        fetch(`${API}/coo/status`).then((r) => r.json()).catch(() => null),
       ]);
 
       setExecutive(executiveData);
@@ -43,8 +66,21 @@ export default function Dashboard() {
       setReadiness(readinessData);
       setBurnIn(burnInData);
       setTimeline(Array.isArray(timelineData) ? timelineData : []);
+      setCoo(cooData);
     } catch (error) {
       console.error("Dashboard load failed:", error);
+    }
+  }
+
+  async function postAction(path) {
+    setActionLoading(true);
+    try {
+      await fetch(`${API}${path}`, { method: "POST" });
+      await loadDashboard();
+    } catch (error) {
+      console.error("Action failed:", error);
+    } finally {
+      setActionLoading(false);
     }
   }
 
@@ -58,8 +94,15 @@ export default function Dashboard() {
   const portfolio = executive?.mission_control?.portfolio;
   const health = executive?.health;
   const recommendation = executive?.mission_control?.recommendation;
-  const opsHealthy = operations?.system_status === "HEALTHY";
-  const readyForPaper = readiness?.paper_trading_ready;
+  const opsHealthy = operations?.system_status === "HEALTHY" || coo?.readiness?.risk?.ready;
+  const readyForPaper = readiness?.paper_trading_ready || coo?.readiness?.ready_for_autonomous_paper_trading;
+  const cooReadiness = coo?.readiness;
+  const cooMission = coo?.mission_control;
+  const cooStatus = cooReadiness?.autonomous_status;
+  const cooRisk = cooReadiness?.risk;
+  const cooPerformance = cooMission?.performance;
+  const positions = cooMission?.positions || [];
+  const recentDecisions = cooMission?.recent_decisions || [];
 
   return (
     <main className="kyle-page">
@@ -68,14 +111,76 @@ export default function Dashboard() {
           <p className="eyebrow">Kyle</p>
           <h1>
             <StatusDot ok={opsHealthy} />
-            {mission?.status || "Loading"}
+            {mission?.status || cooReadiness?.next_best_action || "Loading"}
           </h1>
           <p className="subline">
-            {readyForPaper ? "Ready for Paper Trading" : "Not Ready"}
+            {readyForPaper ? "Ready for Autonomous Paper Trading" : "Not Ready"}
           </p>
         </div>
 
-        <button className="danger-button">Emergency Stop</button>
+        <button
+          className="danger-button"
+          disabled={actionLoading}
+          onClick={() => postAction("/autonomous-trader/stop")}
+        >
+          Emergency Stop
+        </button>
+      </section>
+
+      <section className="panel coo-panel">
+        <div className="panel-header">
+          <div>
+            <p className="eyebrow">COO Control</p>
+            <h2>Autonomous Paper Trader</h2>
+          </div>
+          <span className={cooRisk?.ready ? "pill good" : "pill bad"}>
+            {cooRisk?.ready ? "READY" : "BLOCKED"}
+          </span>
+        </div>
+
+        <div className="coo-actions">
+          <button disabled={actionLoading} onClick={() => postAction("/autonomous-trader/start")}>
+            Start
+          </button>
+          <button disabled={actionLoading} onClick={() => postAction("/autonomous-trader/run-guarded")}>
+            Run Guarded Cycle
+          </button>
+          <button disabled={actionLoading} onClick={() => postAction("/autonomous-trader/stop")}>
+            Stop
+          </button>
+          <button disabled={actionLoading} onClick={() => postAction("/autonomous-trader/liquidate")}>
+            Liquidate Paper
+          </button>
+        </div>
+
+        <section className="grid coo-grid">
+          <div className="metric-card">
+            <span>Status</span>
+            <strong>{cooStatus?.last_status || "—"}</strong>
+            <p>{cooStatus?.last_reason || "Waiting for Kyle status."}</p>
+          </div>
+          <div className="metric-card">
+            <span>Equity</span>
+            <strong>{formatMoney(cooMission?.account?.equity)}</strong>
+            <p>Cash: {formatMoney(cooMission?.account?.buying_power)}</p>
+          </div>
+          <div className="metric-card">
+            <span>Return</span>
+            <strong>{cooPerformance?.return_pct ?? 0}%</strong>
+            <p>Total P/L: {formatMoney(cooPerformance?.total_pnl)}</p>
+          </div>
+          <div className="metric-card">
+            <span>Trades</span>
+            <strong>{cooPerformance?.trade_count ?? 0}</strong>
+            <p>Win rate: {cooPerformance?.win_rate ?? 0}%</p>
+          </div>
+        </section>
+
+        <section className="risk-list">
+          {(cooRisk?.checks || []).map((check) => (
+            <RiskCheck check={check} key={check.name} />
+          ))}
+        </section>
       </section>
 
       <section className="grid">
@@ -83,44 +188,44 @@ export default function Dashboard() {
           <h2>Mission</h2>
           <div className="row">
             <span>Priority</span>
-            <strong>{mission?.headline || "Loading..."}</strong>
+            <strong>{mission?.headline || "Autonomous paper-trading burn-in"}</strong>
           </div>
           <div className="row">
             <span>Mode</span>
-            <strong>{mission?.mode || "—"}</strong>
+            <strong>{mission?.mode || cooMission?.mode || "paper"}</strong>
           </div>
           <div className="row">
             <span>Autopilot</span>
-            <strong>{mission?.autopilot || "—"}</strong>
+            <strong>{mission?.autopilot || (cooStatus?.running ? "Running" : "Stopped")}</strong>
           </div>
-          <p className="note">{mission?.briefing || "Kyle is loading mission data."}</p>
+          <p className="note">{mission?.briefing || "Kyle is monitoring risk, storage, positions, and autonomous paper cycles."}</p>
         </section>
 
         <section className="panel">
           <h2>Portfolio</h2>
           <div className="metric">
             <span>Cash</span>
-            <strong>{formatMoney(portfolio?.cash)}</strong>
+            <strong>{formatMoney(portfolio?.cash ?? cooMission?.account?.buying_power)}</strong>
           </div>
           <div className="metric">
             <span>Equity</span>
-            <strong>{formatMoney(portfolio?.equity)}</strong>
+            <strong>{formatMoney(portfolio?.equity ?? cooMission?.account?.equity)}</strong>
           </div>
           <div className="row">
-            <span>Exposure</span>
-            <strong>{portfolio?.exposure_pct ?? 0}%</strong>
+            <span>Cash %</span>
+            <strong>{formatPct(cooRisk?.metrics?.cash_pct)}</strong>
           </div>
           <div className="row">
             <span>Positions</span>
-            <strong>{portfolio?.open_positions ?? 0}</strong>
+            <strong>{portfolio?.open_positions ?? positions.length}</strong>
           </div>
         </section>
 
         <section className="panel">
           <h2>Recommendation</h2>
-          <h3>{recommendation?.action || "No action required"}</h3>
+          <h3>{recommendation?.action || cooReadiness?.next_best_action || "No action required"}</h3>
           <p className="note">
-            {recommendation?.message || "Kyle is monitoring the market."}
+            {recommendation?.message || "Kyle is ready to continue guarded paper cycles if risk checks remain green."}
           </p>
         </section>
 
@@ -128,13 +233,11 @@ export default function Dashboard() {
           <h2>System</h2>
           <div className="row">
             <span>Health</span>
-            <strong>{operations?.system_status || "Loading"}</strong>
+            <strong>{operations?.system_status || (cooRisk?.ready ? "HEALTHY" : "BLOCKED")}</strong>
           </div>
           <div className="row">
-            <span>Broker</span>
-            <strong>
-              {operations?.broker?.connected ? "Connected" : "Disconnected"}
-            </strong>
+            <span>Storage</span>
+            <strong>{cooReadiness?.storage?.state_file_exists ? "Persisting" : "Waiting"}</strong>
           </div>
           <div className="row">
             <span>Burn-In</span>
@@ -142,8 +245,40 @@ export default function Dashboard() {
           </div>
           <div className="row">
             <span>Readiness</span>
-            <strong>{readiness?.overall_status || "—"}</strong>
+            <strong>{readyForPaper ? "READY" : readiness?.overall_status || "—"}</strong>
           </div>
+        </section>
+      </section>
+
+      <section className="grid lower-grid">
+        <section className="panel">
+          <h2>Positions</h2>
+          {positions.length === 0 ? (
+            <p className="note">No open paper positions.</p>
+          ) : (
+            positions.map((position) => (
+              <div className="position-row" key={position.symbol}>
+                <strong>{position.symbol}</strong>
+                <span>{position.qty} shares</span>
+                <span>{formatMoney(position.market_value)}</span>
+                <span>{position.unrealized_pnl_pct ?? 0}%</span>
+              </div>
+            ))
+          )}
+        </section>
+
+        <section className="panel">
+          <h2>Recent Decisions</h2>
+          {recentDecisions.length === 0 ? (
+            <p className="note">No recent decision logs.</p>
+          ) : (
+            recentDecisions.slice(-6).reverse().map((item) => (
+              <div className="timeline-item" key={item.id || item.timestamp}>
+                <span>{item.timestamp || "—"}</span>
+                <p>{item.event_type || item.action || JSON.stringify(item)}</p>
+              </div>
+            ))
+          )}
         </section>
       </section>
 
@@ -163,7 +298,7 @@ export default function Dashboard() {
       </section>
 
       <footer>
-       Trading Performance: {health?.grade || "—"} / {health?.status || "—"}
+        Trading Performance: {health?.grade || cooPerformance?.return_pct || "—"} / {health?.status || cooStatus?.last_status || "—"}
       </footer>
     </main>
   );
