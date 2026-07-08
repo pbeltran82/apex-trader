@@ -5,30 +5,41 @@ from backend.system_validation import run_system_validation
 
 
 def build_readiness_report():
-
     validation = run_system_validation()
     health = build_health_monitor()
 
+    checks = health.get("checks", {})
+    broker = health.get("broker", {})
+    market_data = health.get("market_data", {})
+
     blocking = []
 
-    if not health["checks"]["broker_connected"]:
+    if not checks.get("broker_connected"):
         blocking.append("Broker is disconnected.")
 
-    if not health["checks"]["portfolio_reconciled"]:
+    if not checks.get("market_data_connected"):
+        blocking.append("Market data is disconnected.")
+
+    if not market_data.get("validated", False):
+        blocking.append("Market data is not validated.")
+
+    if not checks.get("portfolio_reconciled"):
         blocking.append("Portfolio reconciliation failed.")
 
-    if not health["checks"]["trading_allowed"]:
+    if not checks.get("trading_allowed"):
         blocking.append("Enterprise Risk Engine is blocking trading.")
 
-    paper_ready = (
-        validation["success"]
-        and health["healthy"]
+    paper_ready = validation["success"] and health["healthy"]
+
+    live_data_paper_mode = (
+        paper_ready
+        and market_data.get("provider") == "ALPACA"
+        and broker.get("provider") == "SIMULATION"
     )
 
     live_ready = False
 
     if paper_ready:
-
         blocking.extend(
             [
                 "Real broker integration incomplete.",
@@ -37,33 +48,20 @@ def build_readiness_report():
             ]
         )
 
+    if live_data_paper_mode:
+        overall_status = "LIVE_DATA_PAPER_READY"
+    elif paper_ready:
+        overall_status = "READY_FOR_PAPER"
+    else:
+        overall_status = "NOT_READY"
+
     return {
-
-        "generated":
-            datetime.utcnow().isoformat(),
-
-        "paper_trading_ready":
-            paper_ready,
-
-        "live_trading_ready":
-            live_ready,
-
-        "overall_status":
-
-            "READY_FOR_PAPER"
-
-            if paper_ready
-
-            else
-
-            "NOT_READY",
-
-        "validation":
-            validation,
-
-        "health":
-            health,
-
-        "blocking_items":
-            blocking,
+        "generated": datetime.utcnow().isoformat(),
+        "paper_trading_ready": paper_ready,
+        "live_data_paper_mode": live_data_paper_mode,
+        "live_trading_ready": live_ready,
+        "overall_status": overall_status,
+        "validation": validation,
+        "health": health,
+        "blocking_items": blocking,
     }
