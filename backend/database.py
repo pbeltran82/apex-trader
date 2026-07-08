@@ -54,6 +54,29 @@ def initialize_database():
     )
     """)
 
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS execution_queue (
+        id INTEGER PRIMARY KEY,
+        symbol TEXT,
+        status TEXT,
+        payload TEXT,
+        created TEXT,
+        last_updated TEXT
+    )
+    """)
+
+    columns = [row["name"] for row in cur.execute("PRAGMA table_info(execution_queue)")]
+
+    for name, ddl in {
+        "symbol": "ALTER TABLE execution_queue ADD COLUMN symbol TEXT",
+        "status": "ALTER TABLE execution_queue ADD COLUMN status TEXT",
+        "payload": "ALTER TABLE execution_queue ADD COLUMN payload TEXT",
+        "created": "ALTER TABLE execution_queue ADD COLUMN created TEXT",
+        "last_updated": "ALTER TABLE execution_queue ADD COLUMN last_updated TEXT",
+    }.items():
+        if name not in columns:
+            cur.execute(ddl)
+
     conn.commit()
     conn.close()
 
