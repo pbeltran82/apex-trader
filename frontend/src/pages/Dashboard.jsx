@@ -1,7 +1,47 @@
 import "./dashboard.css";
 import { useEffect, useState } from "react";
 
-const API = "/api";
+function resolveApiBase() {
+  const explicit = import.meta.env.VITE_API_BASE_URL;
+  if (explicit) return explicit.replace(/\/$/, "");
+
+  const { protocol, hostname } = window.location;
+
+  if (hostname.includes("-5173.app.github.dev")) {
+    return `${protocol}//${hostname.replace("-5173.app.github.dev", "-8000.app.github.dev")}/api`;
+  }
+
+  if (hostname.includes("-5173.github.dev")) {
+    return `${protocol}//${hostname.replace("-5173.github.dev", "-8000.github.dev")}/api`;
+  }
+
+  if (hostname === "localhost" || hostname === "127.0.0.1") {
+    return "http://127.0.0.1:8000/api";
+  }
+
+  return "/api";
+}
+
+const API = resolveApiBase();
+
+async function apiGet(path, fallback = null) {
+  try {
+    const response = await fetch(`${API}${path}`);
+    if (!response.ok) return fallback;
+    return await response.json();
+  } catch (error) {
+    console.error(`GET ${path} failed:`, error);
+    return fallback;
+  }
+}
+
+async function apiPost(path) {
+  const response = await fetch(`${API}${path}`, { method: "POST" });
+  if (!response.ok) {
+    throw new Error(`${path} failed with status ${response.status}`);
+  }
+  return response.json();
+}
 
 function formatMoney(value) {
   const number = Number(value || 0);
@@ -42,49 +82,50 @@ export default function Dashboard() {
   const [timeline, setTimeline] = useState([]);
   const [coo, setCoo] = useState(null);
   const [actionLoading, setActionLoading] = useState(false);
+  const [lastError, setLastError] = useState(null);
 
   async function loadDashboard() {
-    try {
-      const [
-        executiveData,
-        operationsData,
-        readinessData,
-        burnInData,
-        timelineData,
-        cooData,
-      ] = await Promise.all([
-        fetch(`${API}/executive-dashboard`).then((r) => r.json()).catch(() => null),
-        fetch(`${API}/operations-dashboard`).then((r) => r.json()).catch(() => null),
-        fetch(`${API}/readiness-report`).then((r) => r.json()).catch(() => null),
-        fetch(`${API}/burn-in`).then((r) => r.json()).catch(() => null),
-        fetch(`${API}/timeline`).then((r) => r.json()).catch(() => []),
-        fetch(`${API}/coo/status`).then((r) => r.json()).catch(() => null),
-      ]);
+    const [
+      executiveData,
+      operationsData,
+      readinessData,
+      burnInData,
+      timelineData,
+      cooData,
+    ] = await Promise.all([
+      apiGet("/executive-dashboard"),
+      apiGet("/operations-dashboard"),
+      apiGet("/readiness-report"),
+      apiGet("/burn-in"),
+      apiGet("/timeline", []),
+      apiGet("/coo/status"),
+    ]);
 
-      setExecutive(executiveData);
-      setOperations(operationsData);
-      setReadiness(readinessData);
-      setBurnIn(burnInData);
-      setTimeline(Array.isArray(timelineData) ? timelineData : []);
-      setCoo(cooData);
-    } catch (error) {
-      console.error("Dashboard load failed:", error);
-    }
+    setExecutive(executiveData);
+    setOperations(operationsData);
+    setReadiness(readinessData);
+    setBurnIn(burnInData);
+    setTimeline(Array.isArray(timelineData) ? timelineData : []);
+    setCoo(cooData);
+    setLastError(cooData ? null : `Unable to reach backend at ${API}`);
   }
 
   async function postAction(path) {
     setActionLoading(true);
     try {
-      await fetch(`${API}${path}`, { method: "POST" });
+      await apiPost(path);
       await loadDashboard();
+      setLastError(null);
     } catch (error) {
       console.error("Action failed:", error);
+      setLastError(error.message);
     } finally {
       setActionLoading(false);
     }
   }
 
   useEffect(() => {
+    console.log("Kyle dashboard API base:", API);
     loadDashboard();
     const timer = setInterval(loadDashboard, 5000);
     return () => clearInterval(timer);
@@ -111,10 +152,10 @@ export default function Dashboard() {
           <p className="eyebrow">Kyle</p>
           <h1>
             <StatusDot ok={opsHealthy} />
-            {mission?.status || cooReadiness?.next_best_action || "Loading"}
+            {mission?.status || cooReadiness?.next_best_action || (lastError ? "Backend Offline" : "Loading")}
           </h1>
           <p className="subline">
-            {readyForPaper ? "Ready for Autonomous Paper Trading" : "Not Ready"}
+            {readyForPaper ? "Ready for Autonomous Paper Trading" : lastError || "Not Ready"}
           </p>
         </div>
 
@@ -298,7 +339,7 @@ export default function Dashboard() {
       </section>
 
       <footer>
-        Trading Performance: {health?.grade || cooPerformance?.return_pct || "—"} / {health?.status || cooStatus?.last_status || "—"}
+        API: {API} · Trading Performance: {health?.grade || cooPerformance?.return_pct || "—"} / {health?.status || cooStatus?.last_status || "—"}
       </footer>
     </main>
   );
