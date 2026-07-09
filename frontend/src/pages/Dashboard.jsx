@@ -5,20 +5,9 @@ function resolveApiBase() {
   const explicit = import.meta.env.VITE_API_BASE_URL;
   if (explicit) return explicit.replace(/\/$/, "");
 
-  const { protocol, hostname } = window.location;
-
-  if (hostname.includes("-5173.app.github.dev")) {
-    return `${protocol}//${hostname.replace("-5173.app.github.dev", "-8000.app.github.dev")}/api`;
-  }
-
-  if (hostname.includes("-5173.github.dev")) {
-    return `${protocol}//${hostname.replace("-5173.github.dev", "-8000.github.dev")}/api`;
-  }
-
-  if (hostname === "localhost" || hostname === "127.0.0.1") {
-    return "http://127.0.0.1:8000/api";
-  }
-
+  // Prefer the Vite proxy. In Codespaces, browser access to the exposed 8000
+  // backend URL can fail before FastAPI sees the request, while /api through
+  // the 5173 Vite server proxies reliably to 127.0.0.1:8000.
   return "/api";
 }
 
@@ -107,7 +96,7 @@ export default function Dashboard() {
     setBurnIn(burnInData);
     setTimeline(Array.isArray(timelineData) ? timelineData : []);
     setCoo(cooData);
-    setLastError(cooData ? null : `Unable to reach backend at ${API}`);
+    setLastError(cooData ? null : `Unable to reach backend through ${API}`);
   }
 
   async function postAction(path) {
