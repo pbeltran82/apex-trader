@@ -45,6 +45,72 @@ function formatPct(value) {
   return `${number.toFixed(2)}%`;
 }
 
+function humanize(value) {
+  if (!value) return "—";
+  const normalized = String(value).replaceAll("_", " ").toLowerCase();
+  return normalized.replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function recommendationCopy(action, running) {
+  const normalized = String(action || "").toLowerCase();
+
+  if (running) {
+    return {
+      title: "Autonomous Trader Running",
+      message: "Kyle is operating the paper-trading loop under the active risk gate.",
+    };
+  }
+
+  if (normalized === "start_autonomous_trader") {
+    return {
+      title: "Start Autonomous Trader",
+      message: "Kyle is ready. Start the paper-trading loop when you want autonomous cycles to continue in the background.",
+    };
+  }
+
+  if (normalized === "hold_or_review_blockers") {
+    return {
+      title: "Review Risk Blockers",
+      message: "Kyle is paused because one or more readiness checks needs attention before the next cycle.",
+    };
+  }
+
+  return {
+    title: humanize(action) === "—" ? "No Action Required" : humanize(action),
+    message: "Kyle is monitoring readiness, risk, storage, positions, and paper-trading decisions.",
+  };
+}
+
+function statusCopy(status, reason) {
+  const normalized = String(status || "").toUpperCase();
+
+  const titles = {
+    RESTORED: "Restored From Disk",
+    CYCLE_COMPLETE: "Cycle Complete",
+    RUNNING: "Running",
+    STOPPED: "Stopped",
+    IDLE: "Idle",
+    BLOCKED_RISK_GATE: "Blocked By Risk Gate",
+    MAX_POSITIONS: "Max Positions Reached",
+    NO_CANDIDATE: "No Trade Candidate",
+    REJECTED: "Trade Rejected",
+    ERROR: "Error",
+  };
+
+  const fallbackReasons = {
+    RESTORED: "Paper portfolio restored. Start Kyle when you want background autonomous trading.",
+    CYCLE_COMPLETE: "Latest guarded cycle completed successfully.",
+    RUNNING: "Kyle is actively running autonomous paper cycles.",
+    STOPPED: "Autonomous paper trading is stopped.",
+    IDLE: "Kyle is waiting for an operator command.",
+  };
+
+  return {
+    title: titles[normalized] || humanize(status),
+    reason: reason || fallbackReasons[normalized] || "Waiting for Kyle status.",
+  };
+}
+
 function StatusDot({ ok }) {
   return <span className={ok ? "dot green" : "dot red"} />;
 }
@@ -53,7 +119,7 @@ function RiskCheck({ check }) {
   return (
     <div className="risk-check">
       <div>
-        <strong>{check.name.replaceAll("_", " ")}</strong>
+        <strong>{humanize(check.name)}</strong>
         <p>{check.message}</p>
       </div>
       <span className={check.passed ? "pill good" : "pill bad"}>
@@ -133,6 +199,11 @@ export default function Dashboard() {
   const cooPerformance = cooMission?.performance;
   const positions = cooMission?.positions || [];
   const recentDecisions = cooMission?.recent_decisions || [];
+  const readableStatus = statusCopy(cooStatus?.last_status, cooStatus?.last_reason);
+  const readableRecommendation = recommendationCopy(
+    recommendation?.action || cooReadiness?.next_best_action,
+    cooStatus?.running,
+  );
 
   return (
     <main className="kyle-page">
@@ -141,7 +212,7 @@ export default function Dashboard() {
           <p className="eyebrow">Kyle</p>
           <h1>
             <StatusDot ok={opsHealthy} />
-            {mission?.status || cooReadiness?.next_best_action || (lastError ? "Backend Offline" : "Loading")}
+            {mission?.status || readableRecommendation.title || (lastError ? "Backend Offline" : "Loading")}
           </h1>
           <p className="subline">
             {readyForPaper ? "Ready for Autonomous Paper Trading" : lastError || "Not Ready"}
@@ -186,8 +257,8 @@ export default function Dashboard() {
         <section className="grid coo-grid">
           <div className="metric-card">
             <span>Status</span>
-            <strong>{cooStatus?.last_status || "—"}</strong>
-            <p>{cooStatus?.last_reason || "Waiting for Kyle status."}</p>
+            <strong>{readableStatus.title}</strong>
+            <p>{readableStatus.reason}</p>
           </div>
           <div className="metric-card">
             <span>Equity</span>
@@ -253,9 +324,9 @@ export default function Dashboard() {
 
         <section className="panel">
           <h2>Recommendation</h2>
-          <h3>{recommendation?.action || cooReadiness?.next_best_action || "No action required"}</h3>
+          <h3>{readableRecommendation.title}</h3>
           <p className="note">
-            {recommendation?.message || "Kyle is ready to continue guarded paper cycles if risk checks remain green."}
+            {recommendation?.message || readableRecommendation.message}
           </p>
         </section>
 
@@ -305,7 +376,7 @@ export default function Dashboard() {
             recentDecisions.slice(-6).reverse().map((item) => (
               <div className="timeline-item" key={item.id || item.timestamp}>
                 <span>{item.timestamp || "—"}</span>
-                <p>{item.event_type || item.action || JSON.stringify(item)}</p>
+                <p>{humanize(item.event_type || item.action || "Decision Logged")}</p>
               </div>
             ))
           )}
@@ -328,7 +399,7 @@ export default function Dashboard() {
       </section>
 
       <footer>
-        API: {API} · Trading Performance: {health?.grade || cooPerformance?.return_pct || "—"} / {health?.status || cooStatus?.last_status || "—"}
+        API: {API} · Trading Performance: {health?.grade || cooPerformance?.return_pct || "—"} / {health?.status || readableStatus.title || "—"}
       </footer>
     </main>
   );
