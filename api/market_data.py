@@ -4,11 +4,14 @@ from datetime import datetime, timezone
 import csv
 import io
 import json
+import os
 from typing import Any, Dict, Iterable, Optional
 from urllib.error import HTTPError, URLError
+from urllib.parse import quote, urlencode
 from urllib.request import Request, urlopen
 
 
+ALPACA_LATEST_TRADE_URL = "https://data.alpaca.markets/v2/stocks/{symbol}/trades/latest"
 YAHOO_CHART_URL = (
     "https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
     "?interval=1m&range=1d&includePrePost=false"
@@ -17,20 +20,81 @@ STOOQ_QUOTE_URL = "https://stooq.com/q/l/?s={symbol}.us&f=sd2t2ohlcv&h&e=csv"
 REQUEST_TIMEOUT_SECONDS = 8
 
 
-def _request(url: str, accept: str) -> bytes:
-    request = Request(
-        url,
-        headers={
-            "User-Agent": (
-                "Mozilla/5.0 (X11; Linux x86_64) "
-                "AppleWebKit/537.36 Chrome/124 Safari/537.36"
-            ),
-            "Accept": accept,
-            "Cache-Control": "no-cache",
-        },
-    )
+def _request(url: str, accept: str, headers: Optional[Dict[str, str]] = None) -> bytes:
+    request_headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (X11; Linux x86_64) "
+            "AppleWebKit/537.36 Chrome/124 Safari/537.36"
+        ),
+        "Accept": accept,
+        "Cache-Control": "no-cache",
+    }
+    if headers:
+        request_headers.update(headers)
+
+    request = Request(url, headers=request_headers)
     with urlopen(request, timeout=REQUEST_TIMEOUT_SECONDS) as response:
         return response.read()
+
+
+def _alpaca_credentials() -> tuple[Optional[str], Optional[str]]:
+    key = os.getenv("ALPACA_API_KEY_ID") or os.getenv("APCA_API_KEY_ID")
+    secret = os.getenv("ALPACA_API_SECRET_KEY") or os.getenv("APCA_API_SECRET_KEY")
+    return key, secret
+
+
+def _fetch_alpaca_price(symbol: str) -> Dict[str, Any]:
+    key, secret = _alpaca_credentials()
+    if not key or not secret:
+        return {
+            "symbol": symbol,
+            "ok": False,
+            "source": "alpaca_market_data",
+            "error": "Alpaca API credentials are not configured.",
+        }
+
+    feed = os.getenv("ALPACA_DATA_FEED", "iex").strip() or "iex"
+    url = (
+        ALPACA_LATEST_TRADE_URL.format(symbol=quote(symbol))
+        + "?"
+        + urlencode({"feed": feed})
+    )
+
+    try:
+        payload = json.loads(
+            _request(
+                url,
+                "application/json",
+                headers={
+                    "APCA-API-KEY-ID": key,
+                    "APCA-API-SECRET-KEY": secret,
+                },
+            ).decode("utf-8")
+        )
+        trade = payload.get("trade") or {}
+        price = trade.get("p")
+        if price is None or float(price) <= 0:
+            raise ValueError("No valid latest trade price returned.")
+
+        return {
+            "symbol": symbol,
+            "ok": True,
+            "price": round(float(price), 2),
+            "currency": "USD",
+            "exchange": trade.get("x"),
+            "market_state": "LATEST_TRADE",
+            "observed_at": trade.get("t"),
+            "source": "alpaca_market_data",
+            "feed": feed,
+        }
+    except (HTTPError, URLError, TimeoutError, json.JSONDecodeError, ValueError) as error:
+        return {
+            "symbol": symbol,
+            "ok": False,
+            "source": "alpaca_market_data",
+            "error": str(error),
+            "feed": feed,
+        }
 
 
 def _fetch_yahoo_price(symbol: str) -> Dict[str, Any]:
@@ -110,8 +174,7 @@ def _fetch_stooq_price(symbol: str) -> Dict[str, Any]:
         quote_date = row.get("Date")
         quote_time = row.get("Time")
         if quote_date and quote_date != "N/D":
-            stamp = f"{quote_date}T{quote_time or '00:00:00'}"
-            observed_at = stamp
+            observed_at = f"{quote_date}T{quote_time or '00:00:00'}"
 
         return {
             "symbol": symbol,
@@ -133,27 +196,37 @@ def _fetch_stooq_price(symbol: str) -> Dict[str, Any]:
 
 
 def _fetch_price_with_fallback(symbol: str) -> Dict[str, Any]:
-    yahoo = _fetch_yahoo_price(symbol)
-    if yahoo.get("ok"):
-        yahoo["attempts"] = [
-            {"source": "yahoo_chart", "ok": True},
-        ]
-        return yahoo
+    attempts = []
 
-    stooq = _fetch_stooq_price(symbol)
-    stooq["attempts"] = [
-        {
-            "source": "yahoo_chart",
-            "ok": False,
-            "error": yahoo.get("error"),
-        },
-        {
-            "source": "stooq_csv",
-            "ok": bool(stooq.get("ok")),
-            "error": stooq.get("error"),
-        },
-    ]
-    return stooq
+    providers = (
+        ("alpaca_market_data", _fetch_alpaca_price),
+        ("yahoo_chart", _fetch_yahoo_price),
+        ("stooq_csv", _fetch_stooq_price),
+    )
+
+    last_result: Dict[str, Any] = {
+        "symbol": symbol,
+        "ok": False,
+        "source": "none",
+        "error": "No market data provider succeeded.",
+    }
+
+    for provider_name, provider in providers:
+        result = provider(symbol)
+        attempts.append(
+            {
+                "source": provider_name,
+                "ok": bool(result.get("ok")),
+                "error": result.get("error"),
+            }
+        )
+        last_result = result
+        if result.get("ok"):
+            result["attempts"] = attempts
+            return result
+
+    last_result["attempts"] = attempts
+    return last_result
 
 
 def refresh_market_prices(symbols: Iterable[str]) -> Dict[str, Any]:
@@ -161,8 +234,7 @@ def refresh_market_prices(symbols: Iterable[str]) -> Dict[str, Any]:
         {str(symbol).strip().upper() for symbol in symbols if symbol}
     )
 
-    # Fetch sequentially. This is intentionally conservative because public
-    # quote endpoints commonly rate-limit cloud-hosted IP ranges.
+    # Fetch sequentially to remain conservative with provider rate limits.
     results = [_fetch_price_with_fallback(symbol) for symbol in unique_symbols]
 
     successful = {
@@ -187,8 +259,8 @@ def refresh_market_prices(symbols: Iterable[str]) -> Dict[str, Any]:
 def install_market_data(app_module: Any) -> None:
     """Wrap Kyle's autonomous cycle with a market-price refresh.
 
-    Yahoo is attempted first. Stooq is used automatically when Yahoo rejects
-    the Oracle VM or otherwise fails. The existing cycle then marks positions
+    Authenticated Alpaca data is attempted first. Public Yahoo and Stooq
+    endpoints remain best-effort fallbacks. The existing cycle marks positions
     to market, recalculates equity, and applies stop-loss/take-profit exits.
     """
 
