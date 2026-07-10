@@ -3,19 +3,14 @@ import { useEffect, useState } from "react";
 
 function resolveApiBase() {
   const explicit = import.meta.env.VITE_API_BASE_URL;
-  if (explicit) return explicit.replace(/\/$/, "");
-
-  // Prefer the Vite proxy. In Codespaces, browser access to the exposed 8000
-  // backend URL can fail before FastAPI sees the request, while /api through
-  // the 5173 Vite server proxies reliably to 127.0.0.1:8000.
-  return "/api";
+  return explicit ? explicit.replace(/\/$/, "") : "/api";
 }
 
 const API = resolveApiBase();
 
 async function apiGet(path, fallback = null) {
   try {
-    const response = await fetch(`${API}${path}`);
+    const response = await fetch(`${API}${path}`, { cache: "no-store" });
     if (!response.ok) return fallback;
     return await response.json();
   } catch (error) {
@@ -33,57 +28,27 @@ async function apiPost(path) {
 }
 
 function formatMoney(value) {
-  const number = Number(value || 0);
-  return number.toLocaleString("en-US", {
+  return Number(value || 0).toLocaleString("en-US", {
     style: "currency",
     currency: "USD",
   });
 }
 
-function formatPct(value) {
-  const number = Number(value || 0) * 100;
-  return `${number.toFixed(2)}%`;
+function formatPct(value, alreadyPercent = false) {
+  const number = Number(value || 0);
+  return `${(alreadyPercent ? number : number * 100).toFixed(2)}%`;
 }
 
 function humanize(value) {
   if (!value) return "—";
-  const normalized = String(value).replaceAll("_", " ").toLowerCase();
-  return normalized.replace(/\b\w/g, (letter) => letter.toUpperCase());
-}
-
-function recommendationCopy(action, running) {
-  const normalized = String(action || "").toLowerCase();
-
-  if (running) {
-    return {
-      title: "Autonomous Trader Running",
-      message: "Kyle is operating the paper-trading loop under the active risk gate.",
-    };
-  }
-
-  if (normalized === "start_autonomous_trader") {
-    return {
-      title: "Start Autonomous Trader",
-      message: "Kyle is ready. Start the paper-trading loop when you want autonomous cycles to continue in the background.",
-    };
-  }
-
-  if (normalized === "hold_or_review_blockers") {
-    return {
-      title: "Review Risk Blockers",
-      message: "Kyle is paused because one or more readiness checks needs attention before the next cycle.",
-    };
-  }
-
-  return {
-    title: humanize(action) === "—" ? "No Action Required" : humanize(action),
-    message: "Kyle is monitoring readiness, risk, storage, positions, and paper-trading decisions.",
-  };
+  return String(value)
+    .replaceAll("_", " ")
+    .toLowerCase()
+    .replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
 function statusCopy(status, reason) {
-  const normalized = String(status || "").toUpperCase();
-
+  const normalized = String(status || "IDLE").toUpperCase();
   const titles = {
     RESTORED: "Restored From Disk",
     CYCLE_COMPLETE: "Cycle Complete",
@@ -96,18 +61,41 @@ function statusCopy(status, reason) {
     REJECTED: "Trade Rejected",
     ERROR: "Error",
   };
-
   const fallbackReasons = {
-    RESTORED: "Paper portfolio restored. Start Kyle when you want background autonomous trading.",
-    CYCLE_COMPLETE: "Latest guarded cycle completed successfully.",
-    RUNNING: "Kyle is actively running autonomous paper cycles.",
+    RESTORED: "Paper portfolio restored from disk.",
+    CYCLE_COMPLETE: "The latest guarded paper-trading cycle completed.",
+    RUNNING: "Kyle is actively running autonomous paper-trading cycles.",
     STOPPED: "Autonomous paper trading is stopped.",
     IDLE: "Kyle is waiting for an operator command.",
   };
-
   return {
-    title: titles[normalized] || humanize(status),
+    title: titles[normalized] || humanize(normalized),
     reason: reason || fallbackReasons[normalized] || "Waiting for Kyle status.",
+  };
+}
+
+function recommendationCopy(action, running) {
+  if (running) {
+    return {
+      title: "Autonomous Trader Running",
+      message: "Kyle is operating the paper-trading loop under the active risk gate.",
+    };
+  }
+  if (action === "start_autonomous_trader") {
+    return {
+      title: "Start Autonomous Trader",
+      message: "Kyle is ready for autonomous paper-trading cycles.",
+    };
+  }
+  if (action === "hold_or_review_blockers") {
+    return {
+      title: "Review Risk Blockers",
+      message: "Kyle is paused until the active readiness blockers are resolved.",
+    };
+  }
+  return {
+    title: action ? humanize(action) : "No Action Required",
+    message: "Kyle is monitoring risk, storage, positions, and paper-trading decisions.",
   };
 }
 
@@ -130,37 +118,12 @@ function RiskCheck({ check }) {
 }
 
 export default function Dashboard() {
-  const [executive, setExecutive] = useState(null);
-  const [operations, setOperations] = useState(null);
-  const [readiness, setReadiness] = useState(null);
-  const [burnIn, setBurnIn] = useState(null);
-  const [timeline, setTimeline] = useState([]);
   const [coo, setCoo] = useState(null);
   const [actionLoading, setActionLoading] = useState(false);
   const [lastError, setLastError] = useState(null);
 
   async function loadDashboard() {
-    const [
-      executiveData,
-      operationsData,
-      readinessData,
-      burnInData,
-      timelineData,
-      cooData,
-    ] = await Promise.all([
-      apiGet("/executive-dashboard"),
-      apiGet("/operations-dashboard"),
-      apiGet("/readiness-report"),
-      apiGet("/burn-in"),
-      apiGet("/timeline", []),
-      apiGet("/coo/status"),
-    ]);
-
-    setExecutive(executiveData);
-    setOperations(operationsData);
-    setReadiness(readinessData);
-    setBurnIn(burnInData);
-    setTimeline(Array.isArray(timelineData) ? timelineData : []);
+    const cooData = await apiGet("/coo/status");
     setCoo(cooData);
     setLastError(cooData ? null : `Unable to reach backend through ${API}`);
   }
@@ -180,45 +143,38 @@ export default function Dashboard() {
   }
 
   useEffect(() => {
-    console.log("Kyle dashboard API base:", API);
     loadDashboard();
     const timer = setInterval(loadDashboard, 5000);
     return () => clearInterval(timer);
   }, []);
 
-  const mission = executive?.briefing;
-  const portfolio = executive?.mission_control?.portfolio;
-  const health = executive?.health;
-  const recommendation = executive?.mission_control?.recommendation;
-  const opsHealthy = operations?.system_status === "HEALTHY" || coo?.readiness?.risk?.ready;
-  const readyForPaper = readiness?.paper_trading_ready || coo?.readiness?.ready_for_autonomous_paper_trading;
-  const cooReadiness = coo?.readiness;
-  const cooMission = coo?.mission_control;
-  const cooStatus = cooReadiness?.autonomous_status;
-  const cooRisk = cooReadiness?.risk;
-  const cooPerformance = cooMission?.performance;
-  const positions = cooMission?.positions || [];
-  const recentDecisions = cooMission?.recent_decisions || [];
-  const readableStatus = statusCopy(cooStatus?.last_status, cooStatus?.last_reason);
-  const readableRecommendation = recommendationCopy(
-    recommendation?.action || cooReadiness?.next_best_action,
-    cooStatus?.running,
-  );
+  const readiness = coo?.readiness;
+  const mission = coo?.mission_control;
+  const status = readiness?.autonomous_status;
+  const risk = readiness?.risk;
+  const performance = mission?.performance;
+  const account = mission?.account;
+  const positions = mission?.positions || [];
+  const recentDecisions = mission?.recent_decisions || [];
+  const recentTrades = mission?.recent_trades || [];
+  const readyForPaper = Boolean(readiness?.ready_for_autonomous_paper_trading);
+  const healthy = Boolean(risk?.ready && coo);
+  const readableStatus = statusCopy(status?.last_status, status?.last_reason);
+  const recommendation = recommendationCopy(readiness?.next_best_action, status?.running);
 
   return (
     <main className="kyle-page">
       <section className="hero">
         <div>
-          <p className="eyebrow">Kyle</p>
+          <p className="eyebrow">Kyle Apex Trader</p>
           <h1>
-            <StatusDot ok={opsHealthy} />
-            {mission?.status || readableRecommendation.title || (lastError ? "Backend Offline" : "Loading")}
+            <StatusDot ok={healthy} />
+            {lastError ? "Backend Offline" : recommendation.title}
           </h1>
           <p className="subline">
             {readyForPaper ? "Ready for Autonomous Paper Trading" : lastError || "Not Ready"}
           </p>
         </div>
-
         <button
           className="danger-button"
           disabled={actionLoading}
@@ -234,24 +190,16 @@ export default function Dashboard() {
             <p className="eyebrow">COO Control</p>
             <h2>Autonomous Paper Trader</h2>
           </div>
-          <span className={cooRisk?.ready ? "pill good" : "pill bad"}>
-            {cooRisk?.ready ? "READY" : "BLOCKED"}
+          <span className={risk?.ready ? "pill good" : "pill bad"}>
+            {risk?.ready ? "READY" : "BLOCKED"}
           </span>
         </div>
 
         <div className="coo-actions">
-          <button disabled={actionLoading} onClick={() => postAction("/autonomous-trader/start")}>
-            Start
-          </button>
-          <button disabled={actionLoading} onClick={() => postAction("/autonomous-trader/run-guarded")}>
-            Run Guarded Cycle
-          </button>
-          <button disabled={actionLoading} onClick={() => postAction("/autonomous-trader/stop")}>
-            Stop
-          </button>
-          <button disabled={actionLoading} onClick={() => postAction("/autonomous-trader/liquidate")}>
-            Liquidate Paper
-          </button>
+          <button disabled={actionLoading} onClick={() => postAction("/autonomous-trader/start")}>Start</button>
+          <button disabled={actionLoading} onClick={() => postAction("/autonomous-trader/run-guarded")}>Run Guarded Cycle</button>
+          <button disabled={actionLoading} onClick={() => postAction("/autonomous-trader/stop")}>Stop</button>
+          <button disabled={actionLoading} onClick={() => postAction("/autonomous-trader/liquidate")}>Liquidate Paper</button>
         </div>
 
         <section className="grid coo-grid">
@@ -262,144 +210,90 @@ export default function Dashboard() {
           </div>
           <div className="metric-card">
             <span>Equity</span>
-            <strong>{formatMoney(cooMission?.account?.equity)}</strong>
-            <p>Cash: {formatMoney(cooMission?.account?.buying_power)}</p>
+            <strong>{formatMoney(account?.equity)}</strong>
+            <p>Cash: {formatMoney(account?.buying_power)}</p>
           </div>
           <div className="metric-card">
             <span>Return</span>
-            <strong>{cooPerformance?.return_pct ?? 0}%</strong>
-            <p>Total P/L: {formatMoney(cooPerformance?.total_pnl)}</p>
+            <strong>{formatPct(performance?.return_pct, true)}</strong>
+            <p>Total P/L: {formatMoney(performance?.total_pnl)}</p>
           </div>
           <div className="metric-card">
             <span>Trades</span>
-            <strong>{cooPerformance?.trade_count ?? 0}</strong>
-            <p>Win rate: {cooPerformance?.win_rate ?? 0}%</p>
+            <strong>{performance?.trade_count ?? 0}</strong>
+            <p>Win rate: {formatPct(performance?.win_rate, true)}</p>
           </div>
         </section>
 
         <section className="risk-list">
-          {(cooRisk?.checks || []).map((check) => (
-            <RiskCheck check={check} key={check.name} />
-          ))}
+          {(risk?.checks || []).map((check) => <RiskCheck check={check} key={check.name} />)}
         </section>
       </section>
 
       <section className="grid">
         <section className="panel">
           <h2>Mission</h2>
-          <div className="row">
-            <span>Priority</span>
-            <strong>{mission?.headline || "Autonomous paper-trading burn-in"}</strong>
-          </div>
-          <div className="row">
-            <span>Mode</span>
-            <strong>{mission?.mode || cooMission?.mode || "paper"}</strong>
-          </div>
-          <div className="row">
-            <span>Autopilot</span>
-            <strong>{mission?.autopilot || (cooStatus?.running ? "Running" : "Stopped")}</strong>
-          </div>
-          <p className="note">{mission?.briefing || "Kyle is monitoring risk, storage, positions, and autonomous paper cycles."}</p>
+          <div className="row"><span>Mode</span><strong>{mission?.mode || "paper"}</strong></div>
+          <div className="row"><span>Autopilot</span><strong>{status?.running ? "Running" : "Stopped"}</strong></div>
+          <div className="row"><span>Cycles</span><strong>{status?.cycles ?? 0}</strong></div>
+          <p className="note">{recommendation.message}</p>
         </section>
 
         <section className="panel">
           <h2>Portfolio</h2>
-          <div className="metric">
-            <span>Cash</span>
-            <strong>{formatMoney(portfolio?.cash ?? cooMission?.account?.buying_power)}</strong>
-          </div>
-          <div className="metric">
-            <span>Equity</span>
-            <strong>{formatMoney(portfolio?.equity ?? cooMission?.account?.equity)}</strong>
-          </div>
-          <div className="row">
-            <span>Cash %</span>
-            <strong>{formatPct(cooRisk?.metrics?.cash_pct)}</strong>
-          </div>
-          <div className="row">
-            <span>Positions</span>
-            <strong>{portfolio?.open_positions ?? positions.length}</strong>
-          </div>
+          <div className="metric"><span>Cash</span><strong>{formatMoney(account?.buying_power)}</strong></div>
+          <div className="metric"><span>Equity</span><strong>{formatMoney(account?.equity)}</strong></div>
+          <div className="row"><span>Cash %</span><strong>{formatPct(risk?.metrics?.cash_pct)}</strong></div>
+          <div className="row"><span>Positions</span><strong>{positions.length}</strong></div>
         </section>
 
         <section className="panel">
-          <h2>Recommendation</h2>
-          <h3>{readableRecommendation.title}</h3>
-          <p className="note">
-            {recommendation?.message || readableRecommendation.message}
-          </p>
+          <h2>Risk Limits</h2>
+          <div className="row"><span>Max Drawdown</span><strong>{formatPct(risk?.limits?.max_drawdown_pct)}</strong></div>
+          <div className="row"><span>Max Concentration</span><strong>{formatPct(risk?.limits?.max_position_concentration_pct)}</strong></div>
+          <div className="row"><span>Minimum Cash</span><strong>{formatPct(risk?.limits?.min_cash_pct)}</strong></div>
+          <div className="row"><span>Daily Trade Limit</span><strong>{risk?.limits?.max_daily_trades ?? 0}</strong></div>
         </section>
 
         <section className="panel">
           <h2>System</h2>
-          <div className="row">
-            <span>Health</span>
-            <strong>{operations?.system_status || (cooRisk?.ready ? "HEALTHY" : "BLOCKED")}</strong>
-          </div>
-          <div className="row">
-            <span>Storage</span>
-            <strong>{cooReadiness?.storage?.state_file_exists ? "Persisting" : "Waiting"}</strong>
-          </div>
-          <div className="row">
-            <span>Burn-In</span>
-            <strong>{burnIn?.running ? "Running" : "Stopped"}</strong>
-          </div>
-          <div className="row">
-            <span>Readiness</span>
-            <strong>{readyForPaper ? "READY" : readiness?.overall_status || "—"}</strong>
-          </div>
+          <div className="row"><span>Health</span><strong>{healthy ? "HEALTHY" : "BLOCKED"}</strong></div>
+          <div className="row"><span>State File</span><strong>{readiness?.storage?.state_file_exists ? "Persisting" : "Waiting"}</strong></div>
+          <div className="row"><span>Decision Log</span><strong>{readiness?.storage?.decision_log_file_exists ? "Persisting" : "Waiting"}</strong></div>
+          <div className="row"><span>Readiness</span><strong>{readyForPaper ? "READY" : "NOT READY"}</strong></div>
         </section>
       </section>
 
       <section className="grid lower-grid">
         <section className="panel">
           <h2>Positions</h2>
-          {positions.length === 0 ? (
-            <p className="note">No open paper positions.</p>
-          ) : (
-            positions.map((position) => (
-              <div className="position-row" key={position.symbol}>
-                <strong>{position.symbol}</strong>
-                <span>{position.qty} shares</span>
-                <span>{formatMoney(position.market_value)}</span>
-                <span>{position.unrealized_pnl_pct ?? 0}%</span>
-              </div>
-            ))
-          )}
+          {positions.length === 0 ? <p className="note">No open paper positions.</p> : positions.map((position) => (
+            <div className="position-row" key={position.symbol}>
+              <strong>{position.symbol}</strong>
+              <span>{position.qty} shares</span>
+              <span>{formatMoney(position.market_value)}</span>
+              <span>{formatPct(position.unrealized_pnl_pct, true)}</span>
+            </div>
+          ))}
         </section>
 
         <section className="panel">
-          <h2>Recent Decisions</h2>
-          {recentDecisions.length === 0 ? (
-            <p className="note">No recent decision logs.</p>
+          <h2>Recent Activity</h2>
+          {[...recentDecisions, ...recentTrades].length === 0 ? (
+            <p className="note">No recent paper-trading activity.</p>
           ) : (
-            recentDecisions.slice(-6).reverse().map((item) => (
-              <div className="timeline-item" key={item.id || item.timestamp}>
+            [...recentDecisions, ...recentTrades].slice(-6).reverse().map((item, index) => (
+              <div className="timeline-item" key={item.id || item.timestamp || index}>
                 <span>{item.timestamp || "—"}</span>
-                <p>{humanize(item.event_type || item.action || "Decision Logged")}</p>
+                <p>{humanize(item.event_type || item.action || item.side || "Activity Logged")}</p>
               </div>
             ))
           )}
         </section>
       </section>
 
-      <section className="panel timeline">
-        <h2>Timeline</h2>
-
-        {timeline.length === 0 ? (
-          <p className="note">No recent timeline events. Kyle is monitoring.</p>
-        ) : (
-          timeline.slice(0, 6).map((item, index) => (
-            <div className="timeline-item" key={index}>
-              <span>{item.time || item.generated || "—"}</span>
-              <p>{item.message || item.type || JSON.stringify(item)}</p>
-            </div>
-          ))
-        )}
-      </section>
-
       <footer>
-        API: {API} · Trading Performance: {health?.grade || cooPerformance?.return_pct || "—"} / {health?.status || readableStatus.title || "—"}
+        API: {API} · Mode: {mission?.mode || "paper"} · Status: {readableStatus.title}
       </footer>
     </main>
   );
