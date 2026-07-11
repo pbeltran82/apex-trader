@@ -1,4 +1,5 @@
 import api.app as api_module
+from api.advanced_risk import install_advanced_risk
 from api.backtest import install_backtester
 from api.intelligence import install_intelligence
 from api.market_data import install_market_data
@@ -14,6 +15,7 @@ app = api_module.app
 install_security(api_module)
 install_intelligence(api_module)
 install_portfolio_constraints(api_module)
+install_advanced_risk(api_module)
 install_runtime_hardening(api_module)
 install_risk_enforcement(api_module)
 install_market_data(api_module)
