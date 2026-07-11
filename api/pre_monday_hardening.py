@@ -100,6 +100,30 @@ def _background_stop_pending(app_module: Any) -> bool:
     )
 
 
+def _recalculate_readiness_summary(report: Dict[str, Any]) -> None:
+    checks = list(report.get("checks") or [])
+    operational_checks = [
+        check for check in checks if check.get("name") != "strategy_evidence"
+    ]
+    strategy = report.get("strategy_validation") or {}
+    operational_failed = [check for check in operational_checks if not check.get("passed")]
+    failed = [check for check in checks if not check.get("passed")]
+    operationally_ready = not operational_failed
+
+    report["operationally_ready_for_paper_trading"] = operationally_ready
+    report["ready_for_next_market_open"] = bool(
+        operationally_ready and strategy.get("passed")
+    )
+    report["summary"] = {
+        "operational_checks_passed": len(operational_checks) - len(operational_failed),
+        "operational_checks_total": len(operational_checks),
+        "strategy_evidence_passed": bool(strategy.get("passed")),
+        "checks_passed": len(checks) - len(failed),
+        "checks_total": len(checks),
+        "failed_checks": [check.get("name") for check in failed],
+    }
+
+
 def install_pre_monday_hardening(app_module: Any) -> None:
     if getattr(app_module, "_pre_monday_hardening_installed", False):
         return
@@ -130,6 +154,60 @@ def install_pre_monday_hardening(app_module: Any) -> None:
     market_data.refresh_market_prices = refresh_with_regime_quotes
     # system_readiness also imported this function directly.
     system_readiness.refresh_market_prices = refresh_with_regime_quotes
+
+    original_build_readiness = system_readiness.build_readiness_report
+
+    def hardened_readiness(app: Any) -> Dict[str, Any]:
+        report = original_build_readiness(app)
+        expected_quote_count = len(_symbols_with_regime(app.watchlist))
+
+        for check in report.get("checks", []):
+            if check.get("name") == "authenticated_quote_coverage":
+                details = dict(check.get("details") or {})
+                authenticated = int(details.get("authenticated", 0))
+                passed = authenticated == expected_quote_count
+                details["expected"] = expected_quote_count
+                details["required_symbols"] = sorted(
+                    _symbols_with_regime(app.watchlist)
+                )
+                check["details"] = details
+                check["passed"] = passed
+                check["message"] = (
+                    "Every watchlist and regime symbol has an authenticated Alpaca quote."
+                    if passed
+                    else "One or more watchlist or regime symbols lack an authenticated Alpaca quote."
+                )
+            elif check.get("name") == "historical_bar_coverage":
+                enriched = []
+                for row in check.get("details") or []:
+                    payload = freshness_checked_bars(str(row.get("symbol", "")))
+                    updated = dict(row)
+                    updated.update(
+                        {
+                            "last_completed_bar": payload.get("last_completed_bar"),
+                            "last_completed_bar_age_days": payload.get(
+                                "last_completed_bar_age_days"
+                            ),
+                            "max_history_age_days": payload.get(
+                                "max_history_age_days"
+                            ),
+                            "history_fresh": payload.get("history_fresh", False),
+                        }
+                    )
+                    enriched.append(updated)
+                check["details"] = enriched
+
+        report["hardening"] = {
+            "history_freshness_enforced": True,
+            "max_history_age_days": _max_history_age_days(),
+            "regime_quote_symbols": list(REGIME_QUOTE_SYMBOLS),
+            "stop_before_execution_enforced": True,
+            "timezone_aware_utc_events": True,
+        }
+        _recalculate_readiness_summary(report)
+        return report
+
+    system_readiness.build_readiness_report = hardened_readiness
 
     original_place_buy = app_module._place_paper_buy
 
