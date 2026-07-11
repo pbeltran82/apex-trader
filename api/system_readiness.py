@@ -1,15 +1,12 @@
 from __future__ import annotations
 
-import os
 from typing import Any, Dict, List
 
 from api import risk_gate
 from api.intelligence import MINIMUM_HISTORY_BARS, REGIME_SYMBOLS, _load_bars, market_regime
 from api.market_data import evaluate_market_gate, refresh_market_prices
 from api.security import _operator_token
-
-
-APPROVED_STRATEGY_STATUS = "APPROVED_FOR_PAPER_BURN_IN"
+from api.strategy_validation import strategy_validation_status
 
 
 def _check(name: str, passed: bool, message: str, details: Any = None) -> Dict[str, Any]:
@@ -21,22 +18,6 @@ def _check(name: str, passed: bool, message: str, details: Any = None) -> Dict[s
     if details is not None:
         payload["details"] = details
     return payload
-
-
-def _strategy_validation() -> Dict[str, Any]:
-    status = os.getenv("KYLE_STRATEGY_VALIDATION_STATUS", "UNVALIDATED").strip().upper()
-    approved = status == APPROVED_STRATEGY_STATUS
-    return {
-        "passed": approved,
-        "status": status,
-        "required_status": APPROVED_STRATEGY_STATUS,
-        "message": (
-            "The active strategy is approved for controlled paper burn-in."
-            if approved
-            else "The active strategy has not passed evidence review; autonomous entries must remain disabled."
-        ),
-        "automatic_approval": False,
-    }
 
 
 def _position_provenance(app_module: Any) -> Dict[str, Any]:
@@ -105,7 +86,7 @@ def build_readiness_report(app_module: Any) -> Dict[str, Any]:
     regime_ok = regime.get("regime") != "UNKNOWN"
     risk = risk_gate.risk_telemetry()
     provenance = _position_provenance(app_module)
-    strategy_validation = _strategy_validation()
+    strategy_validation = strategy_validation_status()
 
     signal_diagnostics = []
     for symbol in trade_symbols:
