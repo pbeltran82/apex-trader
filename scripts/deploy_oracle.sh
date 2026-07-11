@@ -6,6 +6,7 @@ SERVICE_NAME="${SERVICE_NAME:-kyle-api}"
 SYSTEM_ENV_FILE="${SYSTEM_ENV_FILE:-/etc/kyle-api.env}"
 WEB_ROOT="${WEB_ROOT:-/var/www/kyle}"
 START_TRADER="${START_TRADER:-0}"
+API_STARTUP_TIMEOUT_SECONDS="${API_STARTUP_TIMEOUT_SECONDS:-60}"
 TIMESTAMP="$(date +%Y%m%d-%H%M%S)"
 ENV_BACKUP="/tmp/kyle-env-${TIMESTAMP}-$$"
 
@@ -31,6 +32,31 @@ append_env_default() {
   if ! sudo grep -q "^${name}=" "$SYSTEM_ENV_FILE" 2>/dev/null; then
     printf '%s=%s\n' "$name" "$value" | sudo tee -a "$SYSTEM_ENV_FILE" >/dev/null
   fi
+}
+
+wait_for_api() {
+  local elapsed=0
+  while (( elapsed < API_STARTUP_TIMEOUT_SECONDS )); do
+    if curl -fsS http://127.0.0.1:8000/ >/dev/null 2>&1; then
+      log "API became ready after ${elapsed} seconds"
+      return 0
+    fi
+
+    if ! sudo systemctl is-active --quiet "$SERVICE_NAME"; then
+      echo "${SERVICE_NAME} stopped while waiting for API readiness." >&2
+      sudo systemctl status "$SERVICE_NAME" --no-pager -l || true
+      sudo journalctl -u "$SERVICE_NAME" -n 80 --no-pager || true
+      return 1
+    fi
+
+    sleep 2
+    elapsed=$((elapsed + 2))
+  done
+
+  echo "API did not become ready within ${API_STARTUP_TIMEOUT_SECONDS} seconds." >&2
+  sudo systemctl status "$SERVICE_NAME" --no-pager -l || true
+  sudo journalctl -u "$SERVICE_NAME" -n 80 --no-pager || true
+  return 1
 }
 
 require_command git
@@ -122,7 +148,7 @@ log "Restarting services"
 sudo systemctl daemon-reload
 sudo systemctl restart "$SERVICE_NAME"
 sudo systemctl reload nginx
-sleep 4
+wait_for_api
 
 log "Checking API and security status"
 curl -fsS http://127.0.0.1:8000/ | python3 -m json.tool
