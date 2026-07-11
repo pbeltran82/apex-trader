@@ -112,6 +112,7 @@ append_env_default KYLE_MAX_OPEN_RISK_PCT 0.02
 append_env_default KYLE_MAX_SECTOR_EXPOSURE_PCT 0.30
 append_env_default KYLE_MAX_CORRELATED_GROUP_EXPOSURE_PCT 0.30
 append_env_default KYLE_BACKTEST_SLIPPAGE_BPS 5
+append_env_default KYLE_STRATEGY_VALIDATION_STATUS UNVALIDATED
 
 log "Running Python compilation and intelligence safeguards"
 PYTHON_BIN="python3"
@@ -130,6 +131,7 @@ fi
   api/risk_gate.py \
   api/decision_engine.py \
   api/security.py \
+  api/strategy_validation.py \
   api/system_readiness.py \
   api/backtest.py \
   api/research.py
