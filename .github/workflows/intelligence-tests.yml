@@ -39,7 +39,7 @@ jobs:
           api/shadow_mode.py
           api/pre_monday_hardening.py
       - name: Run intelligence tests
-        run: python -m unittest discover -s tests -p "test_*.py" -v
+        run: python -m unittest discover -s tests -p "test_*.py" -q
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
