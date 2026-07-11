@@ -131,6 +131,7 @@ fi
   api/risk_gate.py \
   api/decision_engine.py \
   api/security.py \
+  api/strategy_validation.py \
   api/system_readiness.py \
   api/backtest.py \
   api/research.py
