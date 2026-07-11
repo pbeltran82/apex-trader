@@ -5,6 +5,7 @@ from api.risk_gate import install_risk_enforcement, register_risk_gate
 from api.decision_engine import register_decision_engine
 from api.runtime_hardening import install_runtime_hardening
 from api.security import install_security
+from api.system_readiness import install_system_readiness
 
 app = api_module.app
 
@@ -13,5 +14,6 @@ install_intelligence(api_module)
 install_runtime_hardening(api_module)
 install_risk_enforcement(api_module)
 install_market_data(api_module)
+install_system_readiness(api_module)
 register_risk_gate(app)
 register_decision_engine(app)
