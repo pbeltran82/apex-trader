@@ -17,6 +17,17 @@ jobs:
         with:
           python-version: "3.12"
       - name: Compile active engine
-        run: python -m py_compile main.py api/market_data.py api/historical_data.py api/intelligence.py api/runtime_hardening.py api/risk_gate.py api/decision_engine.py
+        run: >-
+          python -m py_compile
+          main.py
+          api/market_data.py
+          api/historical_data.py
+          api/intelligence.py
+          api/runtime_hardening.py
+          api/risk_gate.py
+          api/decision_engine.py
+          api/security.py
+          api/system_readiness.py
+          api/backtest.py
       - name: Run intelligence tests
         run: python -m unittest discover -s tests -p "test_*.py" -v
