@@ -1,4 +1,5 @@
 import api.app as api_module
+from api.backtest import install_backtester
 from api.intelligence import install_intelligence
 from api.market_data import install_market_data
 from api.risk_gate import install_risk_enforcement, register_risk_gate
@@ -15,5 +16,6 @@ install_runtime_hardening(api_module)
 install_risk_enforcement(api_module)
 install_market_data(api_module)
 install_system_readiness(api_module)
+install_backtester(api_module)
 register_risk_gate(app)
 register_decision_engine(app)
