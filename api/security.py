@@ -10,6 +10,10 @@ from fastapi.responses import JSONResponse
 
 SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
 TOKEN_HEADER = "X-Kyle-Operator-Token"
+PROTECTED_READ_PREFIXES = (
+    "/api/backtest",
+    "/api/intelligence/readiness",
+)
 
 
 def _operator_token() -> Optional[str]:
@@ -23,13 +27,22 @@ def _is_direct_local_request(request: Request) -> bool:
     return not forwarded_for and client_host in {"127.0.0.1", "::1", "localhost"}
 
 
+def _requires_operator_auth(request: Request) -> bool:
+    path = request.url.path
+    if not path.startswith("/api/"):
+        return False
+    if any(path.startswith(prefix) for prefix in PROTECTED_READ_PREFIXES):
+        return True
+    return request.method.upper() not in SAFE_METHODS
+
+
 def install_security(app_module: Any) -> None:
     if getattr(app_module, "_security_installed", False):
         return
 
     @app_module.app.middleware("http")
     async def operator_write_guard(request: Request, call_next):
-        if request.method.upper() in SAFE_METHODS or not request.url.path.startswith("/api/"):
+        if not _requires_operator_auth(request):
             return await call_next(request)
 
         if _is_direct_local_request(request):
@@ -42,7 +55,7 @@ def install_security(app_module: Any) -> None:
                 content={
                     "ok": False,
                     "error": "OPERATOR_TOKEN_NOT_CONFIGURED",
-                    "message": "Remote control is disabled until KYLE_OPERATOR_TOKEN is configured.",
+                    "message": "Remote control and protected diagnostics are disabled until KYLE_OPERATOR_TOKEN is configured.",
                 },
             )
 
@@ -53,7 +66,7 @@ def install_security(app_module: Any) -> None:
                 content={
                     "ok": False,
                     "error": "INVALID_OPERATOR_TOKEN",
-                    "message": "A valid Kyle operator token is required for remote control.",
+                    "message": "A valid Kyle operator token is required.",
                 },
             )
 
@@ -66,6 +79,7 @@ def install_security(app_module: Any) -> None:
         return {
             "operator_token_configured": _operator_token() is not None,
             "remote_mutations_require_token": True,
-            "direct_local_mutations_allowed": True,
+            "protected_read_prefixes": list(PROTECTED_READ_PREFIXES),
+            "direct_local_protected_access_allowed": True,
             "token_header": TOKEN_HEADER,
         }
