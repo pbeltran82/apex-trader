@@ -13,6 +13,7 @@ TOKEN_HEADER = "X-Kyle-Operator-Token"
 PROTECTED_READ_PREFIXES = (
     "/api/backtest",
     "/api/intelligence/readiness",
+    "/api/research",
 )
 
 

@@ -131,7 +131,8 @@ fi
   api/decision_engine.py \
   api/security.py \
   api/system_readiness.py \
-  api/backtest.py
+  api/backtest.py \
+  api/research.py
 
 "$PYTHON_BIN" -m unittest discover -s tests -p 'test_*.py' -v
 
