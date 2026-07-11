@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
+import json
 import os
+import threading
 from typing import Any, Dict, Optional
 
 
@@ -39,19 +41,43 @@ def _latest_sell(app_module: Any, symbol: str) -> Optional[Dict[str, Any]]:
 
 
 def install_runtime_hardening(app_module: Any) -> None:
-    """Install low-risk runtime safeguards around the active paper engine."""
+    """Install immutable logging, monotonic event IDs, and re-entry cooldowns."""
 
     if getattr(app_module, "_runtime_hardening_installed", False):
         return
 
-    original_append_decision = app_module._append_decision
     original_score_symbol = app_module._score_symbol
+    event_id_lock = threading.Lock()
+    next_event_id = max(
+        (
+            int(event.get("id", 0))
+            for event in app_module.decision_log
+            if str(event.get("id", "")).isdigit()
+        ),
+        default=0,
+    )
 
     def immutable_append_decision(event_type: str, payload: Dict[str, Any]) -> Dict[str, Any]:
-        # Freeze nested state at event time so later mutations cannot rewrite
-        # historical decisions in memory.
+        nonlocal next_event_id
         frozen_payload = deepcopy(payload)
-        event = original_append_decision(event_type, frozen_payload)
+
+        with event_id_lock:
+            next_event_id += 1
+            event = {
+                **frozen_payload,
+                "id": next_event_id,
+                "timestamp": app_module._now(),
+                "event_type": event_type,
+            }
+            app_module.decision_log.append(event)
+            if len(app_module.decision_log) > 500:
+                del app_module.decision_log[:-500]
+
+            with app_module._persistence_lock:
+                app_module._ensure_data_dir()
+                with app_module.DECISION_LOG_FILE.open("a", encoding="utf-8") as handle:
+                    handle.write(json.dumps(event) + "\n")
+
         return deepcopy(event)
 
     def score_symbol_with_cooldown(symbol: str) -> Dict[str, Any]:
