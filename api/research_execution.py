@@ -233,5 +233,20 @@ def simulate_fold_with_entry_day_execution(
 
 
 def install_research_execution_model() -> None:
+    if getattr(research, "_entry_day_execution_installed", False):
+        return
+
+    original_research = research.run_strategy_research
+
+    def research_with_execution_metadata(symbols: List[str]) -> Dict[str, Any]:
+        result = original_research(symbols)
+        if result.get("ok"):
+            result.setdefault("method", {})["entry_day_stop_target"] = (
+                "EVALUATED_WITH_STOP_FIRST_CONSERVATIVE_ORDERING"
+            )
+        return result
+
     research._simulate_fold = simulate_fold_with_entry_day_execution
+    research.run_strategy_research = research_with_execution_metadata
     research.ENTRY_DAY_EXECUTION_MODEL = "STOP_FIRST"
+    research._entry_day_execution_installed = True
