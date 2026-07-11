@@ -1,3 +1,7 @@
+import json
+from pathlib import Path
+import tempfile
+import threading
 import unittest
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
@@ -27,6 +31,23 @@ def build_bars(count=230, start_price=100.0, daily_step=0.25):
         )
         previous = close
     return bars
+
+
+def runtime_app(directory, trades=None, decision_log=None):
+    data_dir = Path(directory)
+    return SimpleNamespace(
+        trades=list(trades or []),
+        decision_log=list(decision_log or []),
+        _score_symbol=lambda symbol: {
+            "symbol": symbol,
+            "action": "BUY",
+            "approved": True,
+        },
+        _persistence_lock=threading.Lock(),
+        _ensure_data_dir=lambda: data_dir.mkdir(parents=True, exist_ok=True),
+        DECISION_LOG_FILE=data_dir / "decision_log.jsonl",
+        _now=lambda: datetime.now(timezone.utc).isoformat(),
+    )
 
 
 class IntelligenceMathTests(unittest.TestCase):
@@ -80,51 +101,43 @@ class IntelligenceMathTests(unittest.TestCase):
 
 
 class RuntimeHardeningTests(unittest.TestCase):
-    def test_decision_payload_is_frozen(self):
-        events = []
+    def test_decision_payload_is_frozen_and_ids_are_monotonic(self):
+        with tempfile.TemporaryDirectory() as directory:
+            app = runtime_app(directory, decision_log=[{"id": 498}])
+            install_runtime_hardening(app)
 
-        def append_event(event_type, payload):
-            event = {"event_type": event_type, **payload}
-            events.append(event)
-            return event
+            payload = {"account": {"balance": 10000}}
+            first = app._append_decision("TEST", payload)
+            payload["account"]["balance"] = 1
+            second = app._append_decision("TEST_TWO", {"ok": True})
 
-        app = SimpleNamespace(
-            trades=[],
-            _append_decision=append_event,
-            _score_symbol=lambda symbol: {
-                "symbol": symbol,
-                "action": "BUY",
-                "approved": True,
-            },
-        )
-        install_runtime_hardening(app)
-        payload = {"account": {"balance": 10000}}
-        result = app._append_decision("TEST", payload)
-        payload["account"]["balance"] = 1
-        self.assertEqual(events[0]["account"]["balance"], 10000)
-        self.assertEqual(result["account"]["balance"], 10000)
+            self.assertEqual(first["id"], 499)
+            self.assertEqual(second["id"], 500)
+            self.assertEqual(app.decision_log[-2]["account"]["balance"], 10000)
+            self.assertEqual(first["account"]["balance"], 10000)
+
+            persisted = [
+                json.loads(line)
+                for line in app.DECISION_LOG_FILE.read_text(encoding="utf-8").splitlines()
+            ]
+            self.assertEqual([event["id"] for event in persisted], [499, 500])
 
     def test_recent_sell_blocks_reentry(self):
         sold_at = (datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat()
-        app = SimpleNamespace(
-            trades=[
-                {
-                    "symbol": "AAPL",
-                    "side": "SELL",
-                    "timestamp": sold_at,
-                    "reason": "test exit",
-                    "realized_pnl": -10,
-                }
-            ],
-            _append_decision=lambda event_type, payload: payload,
-            _score_symbol=lambda symbol: {
-                "symbol": symbol,
-                "action": "BUY",
-                "approved": True,
-            },
-        )
-        install_runtime_hardening(app)
-        candidate = app._score_symbol("AAPL")
+        trades = [
+            {
+                "symbol": "AAPL",
+                "side": "SELL",
+                "timestamp": sold_at,
+                "reason": "test exit",
+                "realized_pnl": -10,
+            }
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            app = runtime_app(directory, trades=trades)
+            install_runtime_hardening(app)
+            candidate = app._score_symbol("AAPL")
+
         self.assertEqual(candidate["action"], "WAIT")
         self.assertFalse(candidate["approved"])
         self.assertTrue(candidate["cooldown"]["active"])
