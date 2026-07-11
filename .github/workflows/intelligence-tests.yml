@@ -24,6 +24,7 @@ jobs:
           api/historical_data.py
           api/intelligence.py
           api/portfolio_constraints.py
+          api/advanced_risk.py
           api/runtime_hardening.py
           api/risk_gate.py
           api/decision_engine.py
