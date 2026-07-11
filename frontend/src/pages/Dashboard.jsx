@@ -57,12 +57,19 @@ async function apiPost(path) {
     throw new Error("Operator token was rejected. The saved token was cleared.");
   }
   if (response.status === 503) {
-    throw new Error("Remote control is disabled until KYLE_OPERATOR_TOKEN is configured on the server.");
+    throw new Error(
+      "Remote control is disabled until KYLE_OPERATOR_TOKEN is configured on the server.",
+    );
   }
   if (!response.ok) {
     throw new Error(`${path} failed with status ${response.status}`);
   }
-  return response.json();
+
+  const result = await response.json();
+  if (result?.ok === false) {
+    throw new Error(result.message || `${path} was rejected by Kyle.`);
+  }
+  return result;
 }
 
 function formatMoney(value) {
@@ -75,6 +82,13 @@ function formatMoney(value) {
 function formatPct(value, alreadyPercent = false) {
   const number = Number(value || 0);
   return `${(alreadyPercent ? number : number * 100).toFixed(2)}%`;
+}
+
+function formatDateTime(value) {
+  if (!value) return "—";
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return String(value);
+  return parsed.toLocaleString();
 }
 
 function humanize(value) {
@@ -90,25 +104,31 @@ function statusCopy(status, reason) {
   const titles = {
     RESTORED: "Restored From Disk",
     CYCLE_COMPLETE: "Cycle Complete",
-    RUNNING: "Running",
-    STOPPED: "Stopped",
+    SHADOW_CYCLE_COMPLETE: "Shadow Cycle Complete",
+    RUNNING: "Observer Running",
+    STOPPED: "Observer Stopped",
     IDLE: "Idle",
     BLOCKED_RISK_GATE: "Blocked By Risk Gate",
+    BLOCKED_STRATEGY_EVIDENCE: "Strategy Evidence Blocked",
+    START_REJECTED: "Start Rejected",
     MARKET_CLOSED: "Market Closed",
+    MARKET_OPEN: "Market Open",
     STALE_MARKET_DATA: "Stale Market Data",
     MARKET_DATA_UNAVAILABLE: "Market Data Unavailable",
     MAX_POSITIONS: "Max Positions Reached",
     NO_CANDIDATE: "No Trade Candidate",
-    REJECTED: "Trade Rejected",
+    REJECTED: "Signal Rejected",
     ERROR: "Error",
   };
   const fallbackReasons = {
-    RESTORED: "Paper portfolio restored from disk.",
-    CYCLE_COMPLETE: "The latest guarded paper-trading cycle completed.",
-    RUNNING: "Kyle is actively running autonomous paper-trading cycles.",
-    STOPPED: "Autonomous paper trading is stopped.",
+    RESTORED: "System state was restored from disk.",
+    CYCLE_COMPLETE: "The latest guarded cycle completed.",
+    SHADOW_CYCLE_COMPLETE: "The latest hypothetical trading cycle completed.",
+    RUNNING: "Kyle is running observation and hypothetical execution cycles.",
+    STOPPED: "The autonomous observer is stopped.",
     IDLE: "Kyle is waiting for an operator command.",
     MARKET_CLOSED: "Kyle is waiting for the next valid market session.",
+    BLOCKED_STRATEGY_EVIDENCE: "Normal autonomous entries remain blocked.",
   };
   return {
     title: titles[normalized] || humanize(normalized),
@@ -116,65 +136,88 @@ function statusCopy(status, reason) {
   };
 }
 
-function recommendationCopy(action, running) {
-  if (running) {
-    return {
-      title: "Autonomous Trader Running",
-      message: "Kyle is operating the paper-trading loop under the active market and risk gates.",
-    };
-  }
-  if (action === "start_autonomous_trader") {
-    return {
-      title: "Start Autonomous Trader",
-      message: "Kyle is ready for autonomous paper-trading cycles.",
-    };
-  }
-  if (action === "hold_or_review_blockers") {
-    return {
-      title: "Review Risk Blockers",
-      message: "Kyle is paused until the active readiness blockers are resolved.",
-    };
-  }
-  return {
-    title: action ? humanize(action) : "No Action Required",
-    message: "Kyle is monitoring risk, storage, positions, and paper-trading decisions.",
-  };
+function StatusDot({ ok, warning = false }) {
+  const tone = warning ? "amber" : ok ? "green" : "red";
+  return <span className={`dot ${tone}`} />;
 }
 
-function StatusDot({ ok }) {
-  return <span className={ok ? "dot green" : "dot red"} />;
+function Badge({ tone = "neutral", children }) {
+  return <span className={`pill ${tone}`}>{children}</span>;
 }
 
-function RiskCheck({ check }) {
+const RISK_COPY = {
+  drawdown_guard: "Shadow drawdown is within the configured ceiling.",
+  position_concentration_guard: "Largest hypothetical position is within limit.",
+  cash_guard: "The shadow portfolio retains the required cash buffer.",
+  daily_trade_limit: "Hypothetical trade count remains below the daily limit.",
+  daily_loss_guard: "Shadow daily loss remains within the shutdown threshold.",
+  consecutive_loss_guard: "Consecutive shadow losses remain within limit.",
+  total_open_risk_guard: "Total hypothetical stop risk remains within limit.",
+};
+
+function RiskCheck({ name, passed }) {
   return (
     <div className="risk-check">
       <div>
-        <strong>{humanize(check.name)}</strong>
-        <p>{check.message}</p>
+        <strong>{humanize(name)}</strong>
+        <p>{RISK_COPY[name] || "Shadow risk control status."}</p>
       </div>
-      <span className={check.passed ? "pill good" : "pill bad"}>
-        {check.passed ? "PASS" : "BLOCK"}
-      </span>
+      <Badge tone={passed ? "good" : "bad"}>{passed ? "PASS" : "BLOCK"}</Badge>
+    </div>
+  );
+}
+
+function PortfolioPosition({ position, shadow = false }) {
+  return (
+    <div className="position-row">
+      <div>
+        <strong>{position.symbol}</strong>
+        <small>{shadow ? "Hypothetical" : "Actual paper"}</small>
+      </div>
+      <span>{position.qty} shares</span>
+      <span>{formatMoney(position.market_value)}</span>
+      <span>{formatPct(position.unrealized_pnl_pct, true)}</span>
+      {shadow && (
+        <span className="position-levels">
+          Stop {formatMoney(position.stop_loss)} · Target {formatMoney(position.take_profit)}
+        </span>
+      )}
     </div>
   );
 }
 
 export default function Dashboard() {
   const [coo, setCoo] = useState(null);
+  const [shadow, setShadow] = useState(null);
+  const [market, setMarket] = useState(null);
   const [actionLoading, setActionLoading] = useState(false);
   const [lastError, setLastError] = useState(null);
+  const [lastUpdated, setLastUpdated] = useState(null);
 
-  async function loadDashboard() {
-    const cooData = await apiGet("/coo/status");
+  async function loadCoreDashboard() {
+    const [cooData, shadowData] = await Promise.all([
+      apiGet("/coo/status"),
+      apiGet("/shadow"),
+    ]);
     setCoo(cooData);
-    setLastError(cooData ? null : `Unable to reach backend through ${API}`);
+    setShadow(shadowData);
+    setLastUpdated(new Date());
+    setLastError(
+      cooData && shadowData ? null : `Unable to reach all backend services through ${API}`,
+    );
   }
 
-  async function postAction(path) {
+  async function loadMarketStatus() {
+    const marketData = await apiGet("/market-data/status");
+    if (marketData) setMarket(marketData);
+  }
+
+  async function postAction(path, confirmation = null) {
+    if (confirmation && !window.confirm(confirmation)) return;
     setActionLoading(true);
     try {
       await apiPost(path);
-      await loadDashboard();
+      await Promise.all([loadCoreDashboard(), loadMarketStatus()]);
       setLastError(null);
     } catch (error) {
       console.error("Action failed:", error);
@@ -185,24 +228,41 @@ export default function Dashboard() {
   }
 
   useEffect(() => {
-    loadDashboard();
-    const timer = setInterval(loadDashboard, 5000);
-    return () => clearInterval(timer);
+    loadCoreDashboard();
+    loadMarketStatus();
+    const coreTimer = setInterval(loadCoreDashboard, 5000);
+    const marketTimer = setInterval(loadMarketStatus, 60000);
+    return () => {
+      clearInterval(coreTimer);
+      clearInterval(marketTimer);
+    };
   }, []);
 
   const readiness = coo?.readiness;
   const mission = coo?.mission_control;
-  const status = readiness?.autonomous_status;
-  const risk = readiness?.risk;
-  const performance = mission?.performance;
-  const account = mission?.account;
-  const positions = mission?.positions || [];
+  const status = readiness?.autonomous_status || mission?.status;
+  const actualAccount = shadow?.actual_paper_account || mission?.account;
+  const actualPositions = mission?.positions || [];
+  const actualTrades = Number(shadow?.actual_paper_trades ?? mission?.recent_trades?.length ?? 0);
   const recentDecisions = mission?.recent_decisions || [];
-  const recentTrades = mission?.recent_trades || [];
-  const readyForPaper = Boolean(readiness?.ready_for_autonomous_paper_trading);
-  const healthy = Boolean(risk?.ready && coo);
+
+  const shadowEnabled = Boolean(shadow?.enabled);
+  const realOrdersDisabled = shadow?.real_orders_allowed === false;
+  const shadowPositions = shadow?.positions || [];
+  const shadowTrades = shadow?.trades || [];
+  const shadowPerformance = shadow?.performance;
+  const shadowRisk = shadow?.risk;
+  const strategy = shadow?.strategy_validation;
+  const strategyValidated = Boolean(strategy?.passed);
+
+  const marketGate = market?.gate;
+  const marketStatus = marketGate?.status || status?.last_status || "UNKNOWN";
+  const marketAllowed = Boolean(marketGate?.allowed);
   const readableStatus = statusCopy(status?.last_status, status?.last_reason);
-  const recommendation = recommendationCopy(readiness?.next_best_action, status?.running);
+  const backendOnline = Boolean(coo && shadow && !lastError);
+  const safetyReady = backendOnline && shadowEnabled && realOrdersDisabled;
+  const actualAccountUntouched =
+    Number(shadow?.actual_paper_positions || 0) === 0 && actualTrades === 0;
 
   return (
     <main className="kyle-page">
@@ -210,11 +270,12 @@ export default function Dashboard() {
         <div>
           <p className="eyebrow">Kyle Apex Trader</p>
           <h1>
-            <StatusDot ok={healthy} />
-            {lastError ? "Backend Offline" : recommendation.title}
+            <StatusDot ok={safetyReady} warning={backendOnline && !safetyReady} />
+            {lastError ? "Backend Offline" : "Shadow Operations Console"}
           </h1>
           <p className="subline">
-            {readyForPaper ? "Ready for Autonomous Paper Trading" : lastError || "Not Ready"}
+            {lastError ||
+              "Live market observation and hypothetical execution with actual orders disabled."}
           </p>
         </div>
         <button
@@ -226,117 +287,273 @@ export default function Dashboard() {
         </button>
       </section>
 
-      <section className="panel coo-panel">
+      <section className="status-strip" aria-label="Critical safety status">
+        <div>
+          <span>Mode</span>
+          <Badge tone={shadowEnabled ? "shadow" : "warn"}>
+            {shadowEnabled ? "SHADOW" : "DISABLED"}
+          </Badge>
+        </div>
+        <div>
+          <span>Real Orders</span>
+          <Badge tone={realOrdersDisabled ? "good" : "bad"}>
+            {realOrdersDisabled ? "DISABLED" : "UNKNOWN"}
+          </Badge>
+        </div>
+        <div>
+          <span>Strategy</span>
+          <Badge tone={strategyValidated ? "good" : "warn"}>
+            {strategy?.status || "UNKNOWN"}
+          </Badge>
+        </div>
+        <div>
+          <span>Market</span>
+          <Badge tone={marketAllowed ? "good" : marketStatus === "MARKET_CLOSED" ? "neutral" : "warn"}>
+            {humanize(marketStatus)}
+          </Badge>
+        </div>
+        <div>
+          <span>Actual Positions</span>
+          <Badge tone={Number(shadow?.actual_paper_positions || 0) === 0 ? "good" : "bad"}>
+            {shadow?.actual_paper_positions ?? actualPositions.length}
+          </Badge>
+        </div>
+      </section>
+
+      <section className="safety-banner">
+        <strong>No paper or live orders will be submitted in shadow mode.</strong>
+        <span>
+          All entries and exits shown below are hypothetical. The actual paper account must remain unchanged.
+        </span>
+      </section>
+
+      {lastError && <section className="error-banner">{lastError}</section>}
+
+      <section className="panel control-panel">
         <div className="panel-header">
           <div>
-            <p className="eyebrow">COO Control</p>
-            <h2>Autonomous Paper Trader</h2>
+            <p className="eyebrow">Operator Control</p>
+            <h2>Shadow Observer</h2>
           </div>
-          <span className={risk?.ready ? "pill good" : "pill bad"}>
-            {risk?.ready ? "READY" : "BLOCKED"}
-          </span>
+          <Badge tone={status?.running ? "good" : "neutral"}>
+            {status?.running ? "RUNNING" : "STOPPED"}
+          </Badge>
+        </div>
+
+        <div className="control-copy">
+          <strong>{readableStatus.title}</strong>
+          <p>{readableStatus.reason}</p>
         </div>
 
         <div className="coo-actions">
-          <button disabled={actionLoading} onClick={() => postAction("/autonomous-trader/start")}>Start</button>
-          <button disabled={actionLoading} onClick={() => postAction("/autonomous-trader/run-guarded")}>Run Guarded Cycle</button>
-          <button disabled={actionLoading} onClick={() => postAction("/autonomous-trader/stop")}>Stop</button>
-          <button disabled={actionLoading} onClick={() => postAction("/autonomous-trader/liquidate")}>Liquidate Paper</button>
+          {!shadowEnabled && (
+            <button disabled={actionLoading} onClick={() => postAction("/shadow/enable")}>
+              Enable Shadow Mode
+            </button>
+          )}
+          <button
+            className="primary-button"
+            disabled={actionLoading || !shadowEnabled || status?.running}
+            onClick={() => postAction("/autonomous-trader/start")}
+          >
+            Start Shadow Observer
+          </button>
+          <button
+            disabled={actionLoading || !shadowEnabled}
+            onClick={() => postAction("/shadow/run")}
+          >
+            Run One Shadow Cycle
+          </button>
+          <button
+            disabled={actionLoading || !status?.running}
+            onClick={() => postAction("/autonomous-trader/stop")}
+          >
+            Stop Observer
+          </button>
+          <button
+            className="outline-button"
+            disabled={actionLoading}
+            onClick={() =>
+              postAction(
+                "/shadow/reset",
+                "Reset the entire hypothetical shadow portfolio and stop the observer?",
+              )
+            }
+          >
+            Reset Shadow Ledger
+          </button>
           <button
             disabled={actionLoading}
             onClick={() => {
               saveOperatorToken("");
-              setLastError("Saved operator token cleared. The next control action will request it again.");
+              setLastError(
+                "Saved operator token cleared. The next control action will request it again.",
+              );
             }}
           >
             Change Token
           </button>
         </div>
 
-        <section className="grid coo-grid">
-          <div className="metric-card">
-            <span>Status</span>
-            <strong>{readableStatus.title}</strong>
-            <p>{readableStatus.reason}</p>
+        {!strategyValidated && (
+          <div className="blocked-control-note">
+            <Badge tone="bad">NORMAL PAPER ENTRIES BLOCKED</Badge>
+            <span>{strategy?.message || "The active strategy has not passed evidence review."}</span>
           </div>
-          <div className="metric-card">
-            <span>Equity</span>
-            <strong>{formatMoney(account?.equity)}</strong>
-            <p>Cash: {formatMoney(account?.buying_power)}</p>
+        )}
+      </section>
+
+      <section className="grid portfolio-comparison">
+        <section className="panel shadow-panel">
+          <div className="panel-header compact">
+            <div>
+              <p className="eyebrow">Simulation</p>
+              <h2>Shadow Portfolio</h2>
+            </div>
+            <Badge tone="shadow">HYPOTHETICAL</Badge>
           </div>
-          <div className="metric-card">
-            <span>Return</span>
-            <strong>{formatPct(performance?.return_pct, true)}</strong>
-            <p>Total P/L: {formatMoney(performance?.total_pnl)}</p>
-          </div>
-          <div className="metric-card">
-            <span>Trades</span>
-            <strong>{performance?.trade_count ?? 0}</strong>
-            <p>Win rate: {formatPct(performance?.win_rate, true)}</p>
-          </div>
+          <div className="portfolio-hero-value">{formatMoney(shadow?.equity)}</div>
+          <div className="row"><span>Cash</span><strong>{formatMoney(shadow?.cash)}</strong></div>
+          <div className="row"><span>Total P/L</span><strong>{formatMoney(shadowPerformance?.total_pnl)}</strong></div>
+          <div className="row"><span>Return</span><strong>{formatPct(shadowPerformance?.return_pct, true)}</strong></div>
+          <div className="row"><span>Hypothetical Positions</span><strong>{shadowPositions.length}</strong></div>
+          <div className="row"><span>Hypothetical Trades</span><strong>{shadowPerformance?.trade_count ?? shadowTrades.length}</strong></div>
+          <div className="row"><span>Win Rate</span><strong>{formatPct(shadowPerformance?.win_rate_pct, true)}</strong></div>
         </section>
 
-        <section className="risk-list">
-          {(risk?.checks || []).map((check) => <RiskCheck check={check} key={check.name} />)}
+        <section className={`panel actual-panel ${actualAccountUntouched ? "safe-account" : "account-alert"}`}>
+          <div className="panel-header compact">
+            <div>
+              <p className="eyebrow">Protected Account</p>
+              <h2>Actual Paper Account</h2>
+            </div>
+            <Badge tone={actualAccountUntouched ? "good" : "bad"}>
+              {actualAccountUntouched ? "UNTOUCHED" : "CHANGED"}
+            </Badge>
+          </div>
+          <div className="portfolio-hero-value">{formatMoney(actualAccount?.equity)}</div>
+          <div className="row"><span>Balance</span><strong>{formatMoney(actualAccount?.balance)}</strong></div>
+          <div className="row"><span>Buying Power</span><strong>{formatMoney(actualAccount?.buying_power)}</strong></div>
+          <div className="row"><span>Actual Positions</span><strong>{shadow?.actual_paper_positions ?? actualPositions.length}</strong></div>
+          <div className="row"><span>Actual Trades</span><strong>{actualTrades}</strong></div>
+          <div className="row"><span>Real Orders Allowed</span><strong>{realOrdersDisabled ? "NO" : "UNKNOWN"}</strong></div>
+          <p className="note">This account must remain unchanged throughout shadow observation.</p>
         </section>
       </section>
 
-      <section className="grid">
+      <section className="grid operational-grid">
         <section className="panel">
-          <h2>Mission</h2>
-          <div className="row"><span>Mode</span><strong>{mission?.mode || "paper"}</strong></div>
-          <div className="row"><span>Autopilot</span><strong>{status?.running ? "Running" : "Stopped"}</strong></div>
-          <div className="row"><span>Cycles</span><strong>{status?.cycles ?? 0}</strong></div>
-          <p className="note">{recommendation.message}</p>
+          <div className="panel-header compact">
+            <h2>Market Gate</h2>
+            <Badge tone={marketAllowed ? "good" : marketStatus === "MARKET_CLOSED" ? "neutral" : "warn"}>
+              {humanize(marketStatus)}
+            </Badge>
+          </div>
+          <p className="note market-reason">
+            {marketGate?.reason || "Waiting for a verified market-clock response."}
+          </p>
+          <div className="row"><span>Clock Source</span><strong>{marketGate?.clock?.source || "—"}</strong></div>
+          <div className="row"><span>Next Open</span><strong>{formatDateTime(marketGate?.clock?.next_open)}</strong></div>
+          <div className="row"><span>Quote Age Limit</span><strong>{marketGate?.max_quote_age_seconds ?? "—"} sec</strong></div>
+          <div className="row"><span>Data Sources</span><strong>{market?.refresh?.sources?.join(", ") || "—"}</strong></div>
+          <div className="row"><span>Missing Quotes</span><strong>{marketGate?.missing_symbols?.length ?? 0}</strong></div>
+          <div className="row"><span>Stale Quotes</span><strong>{marketGate?.stale_symbols?.length ?? 0}</strong></div>
         </section>
 
-        <section className="panel">
-          <h2>Portfolio</h2>
-          <div className="metric"><span>Cash</span><strong>{formatMoney(account?.buying_power)}</strong></div>
-          <div className="metric"><span>Equity</span><strong>{formatMoney(account?.equity)}</strong></div>
-          <div className="row"><span>Cash %</span><strong>{formatPct(risk?.metrics?.cash_pct)}</strong></div>
-          <div className="row"><span>Positions</span><strong>{positions.length}</strong></div>
+        <section className="panel strategy-panel">
+          <div className="panel-header compact">
+            <h2>Strategy Evidence</h2>
+            <Badge tone={strategyValidated ? "good" : "bad"}>
+              {strategyValidated ? "APPROVED" : "BLOCKED"}
+            </Badge>
+          </div>
+          <div className="strategy-status">{strategy?.status || "UNKNOWN"}</div>
+          <p className="note">{strategy?.message || "Waiting for strategy validation status."}</p>
+          <div className="row"><span>Required Status</span><strong>{humanize(strategy?.required_status)}</strong></div>
+          <div className="row"><span>Automatic Approval</span><strong>{strategy?.automatic_approval ? "YES" : "NO"}</strong></div>
+          <div className="row"><span>Normal Entries</span><strong>{strategyValidated ? "ELIGIBLE" : "DISABLED"}</strong></div>
         </section>
+      </section>
 
-        <section className="panel">
-          <h2>Risk Limits</h2>
-          <div className="row"><span>Max Drawdown</span><strong>{formatPct(risk?.limits?.max_drawdown_pct)}</strong></div>
-          <div className="row"><span>Max Concentration</span><strong>{formatPct(risk?.limits?.max_position_concentration_pct)}</strong></div>
-          <div className="row"><span>Minimum Cash</span><strong>{formatPct(risk?.limits?.min_cash_pct)}</strong></div>
-          <div className="row"><span>Daily Trade Limit</span><strong>{risk?.limits?.max_daily_trades ?? 0}</strong></div>
+      <section className="panel risk-panel">
+        <div className="panel-header compact">
+          <div>
+            <p className="eyebrow">Shadow Controls</p>
+            <h2>Risk Guardrails</h2>
+          </div>
+          <Badge tone={shadowRisk?.ready ? "good" : "bad"}>
+            {shadowRisk?.ready ? "READY" : "BLOCKED"}
+          </Badge>
+        </div>
+        <section className="risk-list">
+          {Object.entries(shadowRisk?.checks || {}).map(([name, passed]) => (
+            <RiskCheck name={name} passed={Boolean(passed)} key={name} />
+          ))}
         </section>
-
-        <section className="panel">
-          <h2>System</h2>
-          <div className="row"><span>Health</span><strong>{healthy ? "HEALTHY" : "BLOCKED"}</strong></div>
-          <div className="row"><span>State File</span><strong>{readiness?.storage?.state_file_exists ? "Persisting" : "Waiting"}</strong></div>
-          <div className="row"><span>Decision Log</span><strong>{readiness?.storage?.decision_log_file_exists ? "Persisting" : "Waiting"}</strong></div>
-          <div className="row"><span>Readiness</span><strong>{readyForPaper ? "READY" : "NOT READY"}</strong></div>
+        <section className="grid risk-metrics">
+          <div className="metric-card"><span>Cash Buffer</span><strong>{formatPct(shadowRisk?.metrics?.cash_pct)}</strong></div>
+          <div className="metric-card"><span>Drawdown</span><strong>{formatPct(shadowRisk?.metrics?.drawdown_pct)}</strong></div>
+          <div className="metric-card"><span>Open Risk</span><strong>{formatPct(shadowRisk?.metrics?.open_risk_pct)}</strong></div>
+          <div className="metric-card"><span>Consecutive Losses</span><strong>{shadowRisk?.metrics?.consecutive_losses ?? 0}</strong></div>
         </section>
       </section>
 
       <section className="grid lower-grid">
         <section className="panel">
-          <h2>Positions</h2>
-          {positions.length === 0 ? <p className="note">No open paper positions.</p> : positions.map((position) => (
-            <div className="position-row" key={position.symbol}>
-              <strong>{position.symbol}</strong>
-              <span>{position.qty} shares</span>
-              <span>{formatMoney(position.market_value)}</span>
-              <span>{formatPct(position.unrealized_pnl_pct, true)}</span>
-            </div>
-          ))}
+          <div className="panel-header compact">
+            <h2>Shadow Positions</h2>
+            <Badge tone="shadow">{shadowPositions.length}</Badge>
+          </div>
+          {shadowPositions.length === 0 ? (
+            <p className="note">No hypothetical positions are open.</p>
+          ) : (
+            shadowPositions.map((position) => (
+              <PortfolioPosition position={position} shadow key={position.symbol} />
+            ))
+          )}
         </section>
 
         <section className="panel">
-          <h2>Recent Activity</h2>
-          {[...recentDecisions, ...recentTrades].length === 0 ? (
-            <p className="note">No recent paper-trading activity.</p>
+          <div className="panel-header compact">
+            <h2>Actual Paper Positions</h2>
+            <Badge tone={actualPositions.length === 0 ? "good" : "bad"}>{actualPositions.length}</Badge>
+          </div>
+          {actualPositions.length === 0 ? (
+            <p className="note">No actual paper positions. This is the required shadow-test state.</p>
           ) : (
-            [...recentDecisions, ...recentTrades].slice(-6).reverse().map((item, index) => (
+            actualPositions.map((position) => (
+              <PortfolioPosition position={position} key={position.symbol} />
+            ))
+          )}
+        </section>
+      </section>
+
+      <section className="grid lower-grid">
+        <section className="panel">
+          <h2>Recent Shadow Trades</h2>
+          {shadowTrades.length === 0 ? (
+            <p className="note">No hypothetical trades have been recorded.</p>
+          ) : (
+            shadowTrades.slice(-8).reverse().map((trade) => (
+              <div className="timeline-item" key={`shadow-${trade.id}-${trade.timestamp}`}>
+                <span>{formatDateTime(trade.timestamp)}</span>
+                <p>
+                  <strong>{trade.side} {trade.symbol}</strong> · {trade.qty} shares at {formatMoney(trade.price)} · Real order: NO
+                </p>
+              </div>
+            ))
+          )}
+        </section>
+
+        <section className="panel">
+          <h2>Recent System Decisions</h2>
+          {recentDecisions.length === 0 ? (
+            <p className="note">No recent decisions are available.</p>
+          ) : (
+            recentDecisions.slice(-8).reverse().map((item, index) => (
               <div className="timeline-item" key={item.id || item.timestamp || index}>
-                <span>{item.timestamp || "—"}</span>
-                <p>{humanize(item.event_type || item.action || item.side || "Activity Logged")}</p>
+                <span>{formatDateTime(item.timestamp)}</span>
+                <p>{humanize(item.event_type || item.action || "Activity Logged")}</p>
               </div>
             ))
           )}
@@ -344,7 +561,7 @@ export default function Dashboard() {
       </section>
 
       <footer>
-        API: {API} · Mode: {mission?.mode || "paper"} · Status: {readableStatus.title}
+        API: {API} · Mode: {shadowEnabled ? "shadow" : "disabled"} · Observer: {status?.running ? "running" : "stopped"} · Updated: {lastUpdated ? lastUpdated.toLocaleTimeString() : "—"}
       </footer>
     </main>
   );
