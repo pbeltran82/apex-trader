@@ -2,13 +2,13 @@ import os
 import unittest
 from unittest.mock import patch
 
-from api import system_readiness
+from api.strategy_validation import strategy_validation_status
 
 
 class StrategyValidationTests(unittest.TestCase):
     def test_strategy_is_unvalidated_by_default(self):
         with patch.dict(os.environ, {}, clear=True):
-            result = system_readiness._strategy_validation()
+            result = strategy_validation_status()
 
         self.assertFalse(result["passed"])
         self.assertEqual(result["status"], "UNVALIDATED")
@@ -20,7 +20,7 @@ class StrategyValidationTests(unittest.TestCase):
             {"KYLE_STRATEGY_VALIDATION_STATUS": "APPROVED_FOR_PAPER_BURN_IN"},
             clear=True,
         ):
-            result = system_readiness._strategy_validation()
+            result = strategy_validation_status()
 
         self.assertTrue(result["passed"])
         self.assertEqual(
@@ -34,7 +34,7 @@ class StrategyValidationTests(unittest.TestCase):
             {"KYLE_STRATEGY_VALIDATION_STATUS": "RESEARCH_COMPLETE"},
             clear=True,
         ):
-            result = system_readiness._strategy_validation()
+            result = strategy_validation_status()
 
         self.assertFalse(result["passed"])
         self.assertEqual(result["status"], "RESEARCH_COMPLETE")
