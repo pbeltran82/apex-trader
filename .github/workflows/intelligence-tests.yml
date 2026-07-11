@@ -12,6 +12,8 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
+      - name: Validate deployment script
+        run: bash -n scripts/deploy_oracle.sh
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
