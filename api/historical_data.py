@@ -71,7 +71,9 @@ def get_daily_bars(
                 "limit": min(MAX_PAGE_SIZE, max(1, remaining)),
                 "adjustment": "all",
                 "feed": feed,
-                "sort": "asc",
+                # Fetch newest bars first. The previous ascending request could
+                # stop after collecting the oldest 260 bars in a longer window.
+                "sort": "desc",
             }
             if page_token:
                 params["page_token"] = page_token
@@ -102,10 +104,11 @@ def get_daily_bars(
             if not page_token:
                 break
 
-        bars = sorted(
+        ordered = sorted(
             bars_by_timestamp.values(),
             key=lambda row: str(row.get("timestamp", "")),
-        )[:requested_limit]
+        )
+        bars = ordered[-requested_limit:]
 
         return {
             "ok": bool(bars),
@@ -118,6 +121,9 @@ def get_daily_bars(
             "source": "alpaca_historical_bars",
             "feed": feed,
             "adjustment": "all",
+            "sort": "latest_first_then_chronological",
+            "first_bar": bars[0].get("timestamp") if bars else None,
+            "last_bar": bars[-1].get("timestamp") if bars else None,
             "error": None if bars else "No usable historical bars returned.",
         }
     except (HTTPError, URLError, TimeoutError, json.JSONDecodeError, ValueError) as error:
