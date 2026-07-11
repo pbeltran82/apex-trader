@@ -19,6 +19,37 @@ def _check(name: str, passed: bool, message: str, details: Any = None) -> Dict[s
     return payload
 
 
+def _position_provenance(app_module: Any) -> Dict[str, Any]:
+    details = []
+    for position in app_module.positions:
+        signal_snapshot = position.get("signal_snapshot")
+        risk_fields = {
+            "risk_budget": position.get("risk_budget"),
+            "initial_risk": position.get("initial_risk"),
+            "stop_loss_pct": position.get("stop_loss_pct"),
+            "take_profit_pct": position.get("take_profit_pct"),
+        }
+        signal_ok = isinstance(signal_snapshot, dict) and bool(signal_snapshot.get("technical"))
+        risk_ok = all(value is not None for value in risk_fields.values())
+        details.append(
+            {
+                "symbol": position.get("symbol"),
+                "signal_snapshot_present": signal_ok,
+                "risk_model_present": risk_ok,
+                "opened_at": position.get("opened_at"),
+                "legacy_position": not (signal_ok and risk_ok),
+            }
+        )
+
+    legacy = [row for row in details if row["legacy_position"]]
+    return {
+        "passed": not legacy,
+        "open_positions": len(details),
+        "legacy_positions": [row["symbol"] for row in legacy],
+        "details": details,
+    }
+
+
 def build_readiness_report(app_module: Any) -> Dict[str, Any]:
     trade_symbols = sorted(set(app_module.watchlist))
     quote_refresh = refresh_market_prices(trade_symbols)
@@ -53,6 +84,7 @@ def build_readiness_report(app_module: Any) -> Dict[str, Any]:
     regime = market_regime(app_module)
     regime_ok = regime.get("regime") != "UNKNOWN"
     risk = risk_gate.risk_telemetry()
+    provenance = _position_provenance(app_module)
 
     signal_diagnostics = []
     for symbol in trade_symbols:
@@ -66,6 +98,7 @@ def build_readiness_report(app_module: Any) -> Dict[str, Any]:
                     "action": score.get("action"),
                     "approved": bool(score.get("approved")),
                     "reason": score.get("reason"),
+                    "portfolio_constraints": score.get("portfolio_constraints"),
                 }
             )
         except Exception as error:
@@ -77,6 +110,7 @@ def build_readiness_report(app_module: Any) -> Dict[str, Any]:
                     "action": "ERROR",
                     "approved": False,
                     "reason": str(error),
+                    "portfolio_constraints": None,
                 }
             )
     signals_ok = all(row["ok"] for row in signal_diagnostics)
@@ -88,10 +122,7 @@ def build_readiness_report(app_module: Any) -> Dict[str, Any]:
             "Every watchlist symbol has an authenticated Alpaca quote."
             if quote_coverage_ok
             else "One or more watchlist symbols lack an authenticated Alpaca quote.",
-            {
-                "expected": len(trade_symbols),
-                "authenticated": len(authenticated_quotes),
-            },
+            {"expected": len(trade_symbols), "authenticated": len(authenticated_quotes)},
         ),
         _check(
             "historical_bar_coverage",
@@ -126,6 +157,24 @@ def build_readiness_report(app_module: Any) -> Dict[str, Any]:
             risk,
         ),
         _check(
+            "position_provenance",
+            provenance["passed"],
+            "Every open position was created by the real intelligence and risk-sizing pipeline."
+            if provenance["passed"]
+            else "Legacy positions without a real signal snapshot or complete risk model are still open.",
+            provenance,
+        ),
+        _check(
+            "portfolio_constraints",
+            bool(getattr(app_module, "_portfolio_constraints_installed", False)),
+            "Projected sector and correlated-group exposure limits are installed.",
+        ),
+        _check(
+            "advanced_risk_controls",
+            bool(getattr(app_module, "_advanced_risk_installed", False)),
+            "Daily-loss, loss-streak, and total-open-risk controls are installed.",
+        ),
+        _check(
             "operator_security",
             _operator_token() is not None,
             "Remote control requires a configured operator token."
@@ -147,14 +196,18 @@ def build_readiness_report(app_module: Any) -> Dict[str, Any]:
             bool(getattr(app_module, "_market_data_installed", False)),
             "Market clock and quote-freshness gating are installed.",
         ),
+        _check(
+            "walk_forward_backtester",
+            bool(getattr(app_module, "_backtester_installed", False)),
+            "No-lookahead walk-forward validation is installed.",
+        ),
     ]
 
     failed = [check for check in checks if not check["passed"]]
     market_closed_normally = market_gate.get("status") == "MARKET_CLOSED"
-    ready = not failed
 
     return {
-        "ready_for_next_market_open": ready,
+        "ready_for_next_market_open": not failed,
         "market_closed_normally": market_closed_normally,
         "market_gate": market_gate,
         "summary": {
