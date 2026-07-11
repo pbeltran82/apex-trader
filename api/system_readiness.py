@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import os
 from typing import Any, Dict, List
 
 from api import risk_gate
 from api.intelligence import MINIMUM_HISTORY_BARS, REGIME_SYMBOLS, _load_bars, market_regime
 from api.market_data import evaluate_market_gate, refresh_market_prices
 from api.security import _operator_token
+
+
+APPROVED_STRATEGY_STATUS = "APPROVED_FOR_PAPER_BURN_IN"
 
 
 def _check(name: str, passed: bool, message: str, details: Any = None) -> Dict[str, Any]:
@@ -17,6 +21,22 @@ def _check(name: str, passed: bool, message: str, details: Any = None) -> Dict[s
     if details is not None:
         payload["details"] = details
     return payload
+
+
+def _strategy_validation() -> Dict[str, Any]:
+    status = os.getenv("KYLE_STRATEGY_VALIDATION_STATUS", "UNVALIDATED").strip().upper()
+    approved = status == APPROVED_STRATEGY_STATUS
+    return {
+        "passed": approved,
+        "status": status,
+        "required_status": APPROVED_STRATEGY_STATUS,
+        "message": (
+            "The active strategy is approved for controlled paper burn-in."
+            if approved
+            else "The active strategy has not passed evidence review; autonomous entries must remain disabled."
+        ),
+        "automatic_approval": False,
+    }
 
 
 def _position_provenance(app_module: Any) -> Dict[str, Any]:
@@ -85,6 +105,7 @@ def build_readiness_report(app_module: Any) -> Dict[str, Any]:
     regime_ok = regime.get("regime") != "UNKNOWN"
     risk = risk_gate.risk_telemetry()
     provenance = _position_provenance(app_module)
+    strategy_validation = _strategy_validation()
 
     signal_diagnostics = []
     for symbol in trade_symbols:
@@ -115,7 +136,7 @@ def build_readiness_report(app_module: Any) -> Dict[str, Any]:
             )
     signals_ok = all(row["ok"] for row in signal_diagnostics)
 
-    checks = [
+    operational_checks = [
         _check(
             "authenticated_quote_coverage",
             quote_coverage_ok,
@@ -202,15 +223,30 @@ def build_readiness_report(app_module: Any) -> Dict[str, Any]:
             "No-lookahead walk-forward validation is installed.",
         ),
     ]
+    strategy_check = _check(
+        "strategy_evidence",
+        strategy_validation["passed"],
+        strategy_validation["message"],
+        strategy_validation,
+    )
+    checks = operational_checks + [strategy_check]
 
+    operational_failed = [check for check in operational_checks if not check["passed"]]
     failed = [check for check in checks if not check["passed"]]
+    operationally_ready = not operational_failed
+    ready_for_market = operationally_ready and strategy_validation["passed"]
     market_closed_normally = market_gate.get("status") == "MARKET_CLOSED"
 
     return {
-        "ready_for_next_market_open": not failed,
+        "operationally_ready_for_paper_trading": operationally_ready,
+        "ready_for_next_market_open": ready_for_market,
+        "strategy_validation": strategy_validation,
         "market_closed_normally": market_closed_normally,
         "market_gate": market_gate,
         "summary": {
+            "operational_checks_passed": len(operational_checks) - len(operational_failed),
+            "operational_checks_total": len(operational_checks),
+            "strategy_evidence_passed": strategy_validation["passed"],
             "checks_passed": len(checks) - len(failed),
             "checks_total": len(checks),
             "failed_checks": [check["name"] for check in failed],
