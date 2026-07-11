@@ -103,6 +103,7 @@ fi
 
 append_env_default KYLE_MAX_QUOTE_AGE_SECONDS 300
 append_env_default KYLE_INTELLIGENCE_CACHE_SECONDS 900
+append_env_default KYLE_MAX_HISTORY_AGE_DAYS 10
 append_env_default KYLE_REENTRY_COOLDOWN_MINUTES 60
 append_env_default KYLE_RISK_PER_TRADE_PCT 0.005
 append_env_default KYLE_REWARD_RISK_RATIO 2.0
@@ -136,7 +137,8 @@ fi
   api/backtest.py \
   api/research.py \
   api/research_execution.py \
-  api/shadow_mode.py
+  api/shadow_mode.py \
+  api/pre_monday_hardening.py
 
 "$PYTHON_BIN" -m unittest discover -s tests -p 'test_*.py' -v
 
@@ -158,6 +160,7 @@ wait_for_api
 log "Checking API and security status"
 curl -fsS http://127.0.0.1:8000/ | python3 -m json.tool
 curl -fsS http://127.0.0.1:8000/api/security/status | python3 -m json.tool
+curl -fsS http://127.0.0.1:8000/api/hardening/pre-monday | python3 -m json.tool
 
 log "Running consolidated intelligence readiness audit"
 curl -fsS http://127.0.0.1:8000/api/intelligence/readiness | python3 -m json.tool
