@@ -35,7 +35,7 @@ def get_daily_bars(symbol: str, limit: int = DEFAULT_BAR_LIMIT) -> Dict[str, Any
         "start": start.isoformat(),
         "end": end.isoformat(),
         "limit": max(1, min(int(limit), 10000)),
-        "adjustment": "raw",
+        "adjustment": "all",
         "feed": feed,
         "sort": "asc",
     }
@@ -71,6 +71,7 @@ def get_daily_bars(symbol: str, limit: int = DEFAULT_BAR_LIMIT) -> Dict[str, Any
             "bar_count": len(bars),
             "source": "alpaca_historical_bars",
             "feed": feed,
+            "adjustment": "all",
             "error": None if bars else "No usable historical bars returned.",
         }
     except (HTTPError, URLError, TimeoutError, json.JSONDecodeError, ValueError) as error:
@@ -81,5 +82,6 @@ def get_daily_bars(symbol: str, limit: int = DEFAULT_BAR_LIMIT) -> Dict[str, Any
             "bar_count": 0,
             "source": "alpaca_historical_bars",
             "feed": feed,
+            "adjustment": "all",
             "error": str(error),
         }
