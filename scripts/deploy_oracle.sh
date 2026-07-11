@@ -134,7 +134,9 @@ fi
   api/strategy_validation.py \
   api/system_readiness.py \
   api/backtest.py \
-  api/research.py
+  api/research.py \
+  api/research_execution.py \
+  api/shadow_mode.py
 
 "$PYTHON_BIN" -m unittest discover -s tests -p 'test_*.py' -v
 
