@@ -4,9 +4,11 @@ from api.market_data import install_market_data
 from api.risk_gate import install_risk_enforcement, register_risk_gate
 from api.decision_engine import register_decision_engine
 from api.runtime_hardening import install_runtime_hardening
+from api.security import install_security
 
 app = api_module.app
 
+install_security(api_module)
 install_intelligence(api_module)
 install_runtime_hardening(api_module)
 install_risk_enforcement(api_module)
