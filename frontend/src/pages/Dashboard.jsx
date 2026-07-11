@@ -7,6 +7,24 @@ function resolveApiBase() {
 }
 
 const API = resolveApiBase();
+const TOKEN_STORAGE_KEY = "kyleOperatorToken";
+
+function getStoredOperatorToken() {
+  try {
+    return window.localStorage.getItem(TOKEN_STORAGE_KEY) || "";
+  } catch {
+    return "";
+  }
+}
+
+function saveOperatorToken(token) {
+  try {
+    if (token) window.localStorage.setItem(TOKEN_STORAGE_KEY, token);
+    else window.localStorage.removeItem(TOKEN_STORAGE_KEY);
+  } catch {
+    // Private browsing or restricted storage can reject localStorage access.
+  }
+}
 
 async function apiGet(path, fallback = null) {
   try {
@@ -20,7 +38,27 @@ async function apiGet(path, fallback = null) {
 }
 
 async function apiPost(path) {
-  const response = await fetch(`${API}${path}`, { method: "POST" });
+  let token = getStoredOperatorToken();
+  if (!token) {
+    token = window.prompt("Enter the Kyle operator token for remote control:")?.trim() || "";
+    if (!token) throw new Error("Operator token is required for remote control.");
+    saveOperatorToken(token);
+  }
+
+  const response = await fetch(`${API}${path}`, {
+    method: "POST",
+    headers: {
+      "X-Kyle-Operator-Token": token,
+    },
+  });
+
+  if (response.status === 401) {
+    saveOperatorToken("");
+    throw new Error("Operator token was rejected. The saved token was cleared.");
+  }
+  if (response.status === 503) {
+    throw new Error("Remote control is disabled until KYLE_OPERATOR_TOKEN is configured on the server.");
+  }
   if (!response.ok) {
     throw new Error(`${path} failed with status ${response.status}`);
   }
@@ -56,6 +94,9 @@ function statusCopy(status, reason) {
     STOPPED: "Stopped",
     IDLE: "Idle",
     BLOCKED_RISK_GATE: "Blocked By Risk Gate",
+    MARKET_CLOSED: "Market Closed",
+    STALE_MARKET_DATA: "Stale Market Data",
+    MARKET_DATA_UNAVAILABLE: "Market Data Unavailable",
     MAX_POSITIONS: "Max Positions Reached",
     NO_CANDIDATE: "No Trade Candidate",
     REJECTED: "Trade Rejected",
@@ -67,6 +108,7 @@ function statusCopy(status, reason) {
     RUNNING: "Kyle is actively running autonomous paper-trading cycles.",
     STOPPED: "Autonomous paper trading is stopped.",
     IDLE: "Kyle is waiting for an operator command.",
+    MARKET_CLOSED: "Kyle is waiting for the next valid market session.",
   };
   return {
     title: titles[normalized] || humanize(normalized),
@@ -78,7 +120,7 @@ function recommendationCopy(action, running) {
   if (running) {
     return {
       title: "Autonomous Trader Running",
-      message: "Kyle is operating the paper-trading loop under the active risk gate.",
+      message: "Kyle is operating the paper-trading loop under the active market and risk gates.",
     };
   }
   if (action === "start_autonomous_trader") {
@@ -200,6 +242,15 @@ export default function Dashboard() {
           <button disabled={actionLoading} onClick={() => postAction("/autonomous-trader/run-guarded")}>Run Guarded Cycle</button>
           <button disabled={actionLoading} onClick={() => postAction("/autonomous-trader/stop")}>Stop</button>
           <button disabled={actionLoading} onClick={() => postAction("/autonomous-trader/liquidate")}>Liquidate Paper</button>
+          <button
+            disabled={actionLoading}
+            onClick={() => {
+              saveOperatorToken("");
+              setLastError("Saved operator token cleared. The next control action will request it again.");
+            }}
+          >
+            Change Token
+          </button>
         </div>
 
         <section className="grid coo-grid">
