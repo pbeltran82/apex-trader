@@ -1,4 +1,4 @@
-from typing import Dict, List
+from typing import Any, Dict, List
 
 from pydantic import BaseModel, Field
 
@@ -138,27 +138,65 @@ def readiness_report() -> Dict:
     }
 
 
-def guarded_cycle() -> Dict:
-    telemetry = risk_telemetry()
-    if not telemetry["ready"]:
-        core._autonomous_state.update({
-            "last_status": "BLOCKED_RISK_GATE",
-            "last_action": "NO_TRADE",
-            "last_selected_symbol": None,
-            "last_reason": "Readiness risk gate blocked autonomous cycle.",
-        })
-        event = core._append_decision("RISK_GATE_BLOCKED", {"risk": telemetry})
-        core._save_state()
-        return {
-            "ok": False,
-            "message": "Autonomous cycle blocked by readiness risk gate.",
-            "risk": telemetry,
-            "event": event,
-            "status": core.autonomous_status(),
-        }
+def install_risk_enforcement(app_module: Any) -> None:
+    """Wrap the active loop so every market-open cycle enforces risk limits.
 
+    A blocked risk gate prevents new entries but still permits management of
+    existing positions using the freshly validated market prices supplied by
+    the outer market-data gate.
+    """
+
+    if getattr(app_module, "_risk_enforcement_installed", False):
+        return
+
+    original_run_cycle = app_module.run_autonomous_cycle
+
+    def risk_enforced_cycle() -> Dict:
+        telemetry = risk_telemetry()
+        if telemetry["ready"]:
+            result = original_run_cycle()
+            result["risk_gate"] = telemetry
+            return result
+
+        with app_module._autonomous_lock:
+            app_module._autonomous_state["cycles"] += 1
+            app_module._autonomous_state["last_run"] = app_module._now()
+            app_module._autonomous_state["last_error"] = None
+            exit_updates = app_module._manage_positions()
+            app_module._refresh_equity()
+            app_module._autonomous_state.update(
+                {
+                    "last_status": "BLOCKED_RISK_GATE",
+                    "last_action": "MANAGED_ONLY",
+                    "last_selected_symbol": None,
+                    "last_reason": "Risk limits blocked new entries; existing positions were managed only.",
+                }
+            )
+            event = app_module._append_decision(
+                "RISK_GATE_BLOCKED",
+                {
+                    "risk": telemetry,
+                    "exit_updates": exit_updates,
+                    "action": "MANAGED_ONLY",
+                },
+            )
+            app_module._save_state()
+            return app_module.autonomous_status(
+                extra={
+                    "risk_gate": telemetry,
+                    "exit_updates": exit_updates,
+                    "decision": event,
+                }
+            )
+
+    app_module.run_autonomous_cycle = risk_enforced_cycle
+    app_module._risk_enforcement_installed = True
+
+
+def guarded_cycle() -> Dict:
     result = core.run_autonomous_cycle()
-    result["risk_gate"] = telemetry
+    if "risk_gate" not in result:
+        result["risk_gate"] = risk_telemetry()
     return result
 
 
