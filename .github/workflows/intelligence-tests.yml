@@ -1,0 +1,22 @@
+name: Intelligence safeguards
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Compile active engine
+        run: python -m py_compile main.py api/market_data.py api/historical_data.py api/intelligence.py api/runtime_hardening.py api/risk_gate.py api/decision_engine.py
+      - name: Run intelligence tests
+        run: python -m unittest discover -s tests -p "test_*.py" -v
