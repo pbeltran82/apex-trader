@@ -10,25 +10,16 @@ API_STARTUP_TIMEOUT_SECONDS="${API_STARTUP_TIMEOUT_SECONDS:-60}"
 TIMESTAMP="$(date +%Y%m%d-%H%M%S)"
 ENV_BACKUP="/tmp/kyle-env-${TIMESTAMP}-$$"
 
-log() {
-  printf '\n[%s] %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*"
-}
-
-cleanup() {
-  rm -f "$ENV_BACKUP"
-}
+log() { printf '\n[%s] %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*"; }
+cleanup() { rm -f "$ENV_BACKUP"; }
 trap cleanup EXIT
 
 require_command() {
-  command -v "$1" >/dev/null 2>&1 || {
-    echo "Required command is missing: $1" >&2
-    exit 1
-  }
+  command -v "$1" >/dev/null 2>&1 || { echo "Required command is missing: $1" >&2; exit 1; }
 }
 
 append_env_default() {
-  local name="$1"
-  local value="$2"
+  local name="$1" value="$2"
   if ! sudo grep -q "^${name}=" "$SYSTEM_ENV_FILE" 2>/dev/null; then
     printf '%s=%s\n' "$name" "$value" | sudo tee -a "$SYSTEM_ENV_FILE" >/dev/null
   fi
@@ -41,21 +32,15 @@ wait_for_api() {
       log "API became ready after ${elapsed} seconds"
       return 0
     fi
-
     if ! sudo systemctl is-active --quiet "$SERVICE_NAME"; then
-      echo "${SERVICE_NAME} stopped while waiting for API readiness." >&2
       sudo systemctl status "$SERVICE_NAME" --no-pager -l || true
       sudo journalctl -u "$SERVICE_NAME" -n 80 --no-pager || true
       return 1
     fi
-
     sleep 2
     elapsed=$((elapsed + 2))
   done
-
   echo "API did not become ready within ${API_STARTUP_TIMEOUT_SECONDS} seconds." >&2
-  sudo systemctl status "$SERVICE_NAME" --no-pager -l || true
-  sudo journalctl -u "$SERVICE_NAME" -n 80 --no-pager || true
   return 1
 }
 
@@ -67,13 +52,12 @@ require_command openssl
 
 cd "$REPO_DIR"
 
-log "Stopping autonomous paper trading before deployment"
+log "Stopping autonomous observation before deployment"
 curl -fsS -X POST http://127.0.0.1:8000/api/autonomous-trader/stop >/dev/null 2>&1 || true
+sudo systemctl stop kyle-session-supervisor.service >/dev/null 2>&1 || true
 
 log "Backing up runtime state"
-if [[ -d data ]]; then
-  cp -a data "data-before-deploy-${TIMESTAMP}"
-fi
+if [[ -d data ]]; then cp -a data "data-before-deploy-${TIMESTAMP}"; fi
 
 log "Preserving the local secret environment file"
 if [[ -f .env ]]; then
@@ -85,15 +69,11 @@ fi
 log "Updating repository from origin/main"
 git pull --rebase origin main
 
-if [[ -f "$ENV_BACKUP" ]]; then
-  cp "$ENV_BACKUP" .env
-  chmod 600 .env
-fi
+if [[ -f "$ENV_BACKUP" ]]; then cp "$ENV_BACKUP" .env; chmod 600 .env; fi
 
 log "Configuring protected system environment"
 sudo touch "$SYSTEM_ENV_FILE"
 sudo chmod 600 "$SYSTEM_ENV_FILE"
-
 if ! sudo grep -q '^KYLE_OPERATOR_TOKEN=' "$SYSTEM_ENV_FILE"; then
   OPERATOR_TOKEN="$(openssl rand -hex 32)"
   printf 'KYLE_OPERATOR_TOKEN=%s\n' "$OPERATOR_TOKEN" | sudo tee -a "$SYSTEM_ENV_FILE" >/dev/null
@@ -114,32 +94,20 @@ append_env_default KYLE_MAX_SECTOR_EXPOSURE_PCT 0.30
 append_env_default KYLE_MAX_CORRELATED_GROUP_EXPOSURE_PCT 0.30
 append_env_default KYLE_BACKTEST_SLIPPAGE_BPS 5
 append_env_default KYLE_STRATEGY_VALIDATION_STATUS UNVALIDATED
+append_env_default KYLE_SESSION_POLL_SECONDS 30
+append_env_default KYLE_SESSION_MAX_WAIT_SECONDS 7200
 
-log "Running Python compilation and intelligence safeguards"
+log "Running Python compilation and safeguards"
 PYTHON_BIN="python3"
-if [[ -x .venv/bin/python ]]; then
-  PYTHON_BIN=".venv/bin/python"
-fi
+if [[ -x .venv/bin/python ]]; then PYTHON_BIN=".venv/bin/python"; fi
 
 "$PYTHON_BIN" -m py_compile \
-  main.py \
-  api/market_data.py \
-  api/historical_data.py \
-  api/intelligence.py \
-  api/portfolio_constraints.py \
-  api/advanced_risk.py \
-  api/runtime_hardening.py \
-  api/risk_gate.py \
-  api/decision_engine.py \
-  api/security.py \
-  api/strategy_validation.py \
-  api/system_readiness.py \
-  api/backtest.py \
-  api/research.py \
-  api/research_execution.py \
-  api/shadow_mode.py \
-  api/pre_monday_hardening.py
-
+  main.py api/market_data.py api/historical_data.py api/intelligence.py \
+  api/portfolio_constraints.py api/advanced_risk.py api/runtime_hardening.py \
+  api/risk_gate.py api/decision_engine.py api/security.py api/strategy_validation.py \
+  api/system_readiness.py api/backtest.py api/research.py api/research_execution.py \
+  api/shadow_mode.py api/pre_monday_hardening.py scripts/market_session_supervisor.py
+bash -n scripts/install_session_supervisor.sh
 "$PYTHON_BIN" -m unittest discover -s tests -p 'test_*.py' -v
 
 log "Building production dashboard"
@@ -151,25 +119,29 @@ sudo mkdir -p "$WEB_ROOT"
 sudo find "$WEB_ROOT" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
 sudo cp -a frontend/dist/. "$WEB_ROOT/"
 
-log "Restarting services"
+log "Restarting API and nginx"
 sudo systemctl daemon-reload
 sudo systemctl restart "$SERVICE_NAME"
 sudo systemctl reload nginx
 wait_for_api
 
-log "Checking API and security status"
+log "Installing automatic shadow market session supervisor"
+REPO_DIR="$REPO_DIR" SYSTEM_ENV_FILE="$SYSTEM_ENV_FILE" PYTHON_BIN="$PYTHON_BIN" bash scripts/install_session_supervisor.sh
+
+log "Checking API, hardening, and timer status"
 curl -fsS http://127.0.0.1:8000/ | python3 -m json.tool
 curl -fsS http://127.0.0.1:8000/api/security/status | python3 -m json.tool
 curl -fsS http://127.0.0.1:8000/api/hardening/pre-monday | python3 -m json.tool
-
-log "Running consolidated intelligence readiness audit"
 curl -fsS http://127.0.0.1:8000/api/intelligence/readiness | python3 -m json.tool
+systemctl is-enabled kyle-session-supervisor.timer
+systemctl is-active kyle-session-supervisor.timer
+systemctl list-timers kyle-session-supervisor.timer --no-pager
 
 if [[ "$START_TRADER" == "1" ]]; then
-  log "Starting autonomous paper trader"
+  log "Starting autonomous observer by explicit deployment override"
   curl -fsS -X POST http://127.0.0.1:8000/api/autonomous-trader/start | python3 -m json.tool
 else
-  log "Autonomous trader remains stopped; set START_TRADER=1 to start after deployment"
+  log "Observer remains stopped; the timer will supervise the next market session"
 fi
 
 printf '\nDeployment completed successfully.\n'
