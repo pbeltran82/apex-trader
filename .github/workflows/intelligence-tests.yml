@@ -22,8 +22,10 @@ jobs:
             tests
             main.py
           sparse-checkout-cone-mode: false
-      - name: Validate deployment script
-        run: bash -n scripts/deploy_oracle.sh
+      - name: Validate deployment scripts
+        run: |
+          bash -n scripts/deploy_oracle.sh
+          bash -n scripts/install_session_supervisor.sh
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -50,6 +52,7 @@ jobs:
           api/research_execution.py
           api/shadow_mode.py
           api/pre_monday_hardening.py
+          scripts/market_session_supervisor.py
       - name: Run intelligence tests
         run: python -m unittest discover -s tests -p "test_*.py" -q
       - name: Set up Node
