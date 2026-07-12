@@ -2,10 +2,14 @@
 set -Eeuo pipefail
 
 REPO_DIR="${REPO_DIR:-$HOME/apex-trader}"
+REPO_DIR="$(cd "$REPO_DIR" && pwd)"
 SYSTEM_ENV_FILE="${SYSTEM_ENV_FILE:-/etc/kyle-api.env}"
 RUN_USER="${RUN_USER:-$(id -un)}"
 PYTHON_BIN="${PYTHON_BIN:-$REPO_DIR/.venv/bin/python}"
 
+if [[ "$PYTHON_BIN" != /* ]]; then
+  PYTHON_BIN="$REPO_DIR/$PYTHON_BIN"
+fi
 if [[ ! -x "$PYTHON_BIN" ]]; then
   PYTHON_BIN="$(command -v python3)"
 fi
