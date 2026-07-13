@@ -25,6 +25,7 @@ Requires=kyle-api.service
 Type=simple
 User=$RUN_USER
 WorkingDirectory=$REPO_DIR
+Environment=PYTHONPATH=$REPO_DIR
 EnvironmentFile=$SYSTEM_ENV_FILE
 ExecStart=$PYTHON_BIN $REPO_DIR/scripts/market_session_supervisor.py
 Restart=no
