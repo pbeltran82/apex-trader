@@ -13,6 +13,13 @@ from typing import Any, Callable, Dict, Optional
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
+# When this file is launched directly, Python puts scripts/ rather than the
+# repository root on sys.path. Add the root explicitly so imports work from
+# systemd, cron, shells, and tests without relying only on external PYTHONPATH.
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
 from api.market_data import _fetch_alpaca_clock
 
 
